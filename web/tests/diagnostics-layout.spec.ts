@@ -78,12 +78,40 @@ test('a running check keeps its previous report readable and updates after compl
   await expect(desktop.getByRole('button')).toBeEnabled();
 });
 
+test('desktop discovery explains missing installation, processes and native connection', async ({ page }) => {
+  const state = await mockConsole(page);
+  state.data.jobs = [{
+    id: 'doctor-empty', kind: 'doctor', state: 'completed', createdAt: 2000, error: null,
+    report: {
+      purpose: 'rust-read-only-discovery', checkedAt: 2000,
+      installation: null, desktops: [], native: null, sharedDesktopVerified: false,
+    },
+  }];
+  await page.goto('/?view=settings&tab=diagnostics');
+  const desktop = page.getByRole('region', { name: '桌面检查', exact: true });
+  await expect(desktop.getByText('未读取到安装信息，请先检测或设置安装路径。')).toBeVisible();
+  await expect(desktop.getByText('未检测到运行中的官方桌面进程。')).toBeVisible();
+  await expect(desktop.getByText('未检测到已验证的原生连接', { exact: true })).toBeVisible();
+  await expect(desktop.getByText('本次检查仅读取本机环境，未发送模型请求。')).toBeVisible();
+  expect(state.writes).toEqual([]);
+});
+
 for (const theme of ['light', 'dark'] as const) {
   for (const width of [375, 1440]) {
     test(`environment workspace fits ${width}px in ${theme} mode and supports keyboard controls`, async ({
       page,
     }, info) => {
       const state = await mockConsole(page);
+      const executable = `C:\\${'Desktop directory\\'.repeat(12)}Codex.exe`;
+      state.data.jobs = [{
+        id: 'doctor-discovery', kind: 'doctor', state: 'completed', createdAt: 2000, error: null,
+        report: {
+          purpose: 'rust-read-only-discovery', checkedAt: 2000,
+          installation: { ...state.data.installation!, appServerVersion: 'codex 1.0.0' },
+          desktops: [{ pid: 1234, name: 'Codex.exe', executable }, { pid: 5678, name: 'Codex', executable: null }],
+          native: { ownerPid: 1234, verified: true }, sharedDesktopVerified: false,
+        },
+      }];
       await page.addInitScript(
         (value) => localStorage.setItem('codex-bridge.theme.v1', value),
         theme,
@@ -94,6 +122,12 @@ for (const theme of ['light', 'dark'] as const) {
       const runtime = page.getByRole('region', { name: '原生运行环境', exact: true });
       await expect(runtime.getByText('已配置', { exact: true })).toBeVisible();
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+      const desktop = page.getByRole('region', { name: '桌面检查', exact: true });
+      await expect(desktop.getByText('检测到 2 个桌面进程', { exact: true })).toBeVisible();
+      await expect(desktop.getByText('已验证 · 桌面进程 PID 1234', { exact: true })).toBeVisible();
+      await expect(desktop.getByText(executable, { exact: true })).toBeVisible();
+      await expect(desktop.getByText('无法读取进程路径', { exact: true })).toBeVisible();
+      await expect(desktop.getByText('codex 1.0.0', { exact: true })).toBeVisible();
       const main = await runtime.boundingBox();
       const tools = await page
         .getByRole('region', { name: '请求原文调试', exact: true })

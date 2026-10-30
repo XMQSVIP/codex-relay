@@ -35,6 +35,9 @@ export interface Report {
   provider?: { id: string; model: string; baseUrl: string; auth: string };
   checkedAt?: number;
   sharedDesktopVerified?: boolean;
+  installation?: Installation | null;
+  desktops?: { pid: number; name: string; executable: string | null }[];
+  native?: { ownerPid: number; verified: boolean } | null;
 }
 export interface Job {
   id: string;

@@ -8,7 +8,14 @@ for (const stale of [false, true]) {
     policy.features = [];
     if (stale) policy.capabilities = { installation: 'older-native', provider: 'fixture', checkedAt: 1, stale: true, models: [], webSearch: null, imageGeneration: null, errorCode: null, verifiedFeatures: [] };
     await page.goto(`/?view=accounts&account=${nativeId}&section=advanced`);
-    await page.getByText('能力与原生版本', { exact: true }).click();
+    const trigger = page.locator('.capability-details > summary');
+    await expect(trigger.getByText('展开设置', { exact: true })).toBeVisible();
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(trigger.getByText('收起设置', { exact: true })).toBeVisible();
+    await page.keyboard.press('Space');
+    await expect(trigger.getByText('展开设置', { exact: true })).toBeVisible();
+    await trigger.click();
     await expect(page.getByText('客户端 function、custom、namespace 和 MCP 工具默认可用，无需验证。')).toBeVisible();
     for (const name of ['内嵌图片输入', '搜索', '生图']) {
       await expect(page.getByRole('checkbox', { name, exact: true })).toBeChecked();

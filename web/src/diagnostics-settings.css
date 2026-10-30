@@ -290,6 +290,49 @@
   font-size: 12px;
 }
 
+.diagnostic-desktop-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 16px;
+}
+
+.diagnostic-desktop-path {
+  grid-column: 1 / -1;
+}
+
+.diagnostic-desktop-facts dd,
+.diagnostic-desktop-processes {
+  font-size: 13px;
+}
+
+.diagnostic-desktop-processes {
+  margin-top: 16px;
+}
+
+.diagnostic-desktop-processes h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.diagnostic-desktop-processes p {
+  color: var(--muted);
+}
+
+.diagnostic-desktop-processes ul {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.diagnostic-desktop-processes li + li {
+  margin-top: 12px;
+}
+
+.diagnostic-desktop-processes code {
+  display: block;
+  color: var(--muted);
+}
+
 .diagnostic-checks > summary {
   flex-wrap: wrap;
   margin-top: 8px;

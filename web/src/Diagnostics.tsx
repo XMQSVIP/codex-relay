@@ -49,6 +49,9 @@ function DiagnosticResult({ report }: { report: Report }) {
   const passed = checks.filter((check) => check.state === 'passed').length;
   return (
     <>
+      {report.purpose === 'rust-read-only-discovery' || report.desktops !== undefined ? (
+        <DesktopCheckResult report={report} />
+      ) : null}
       {report.provider ? (
         <>
           <dl className="diagnostic-provider">
@@ -104,6 +107,62 @@ function DiagnosticResult({ report }: { report: Report }) {
           </ul>
         </details>
       ) : null}
+    </>
+  );
+}
+
+function DesktopCheckResult({ report }: { report: Report }) {
+  const installation = report.installation;
+  const desktops = report.desktops ?? [];
+  return (
+    <>
+      <dl className="diagnostic-desktop-facts">
+        <div>
+          <dt>安装信息</dt>
+          <dd>{installation ? '已读取' : '未读取到安装信息，请先检测或设置安装路径。'}</dd>
+        </div>
+        <div>
+          <dt>原生连接</dt>
+          <dd>
+            {report.native?.verified
+              ? `已验证 · 桌面进程 PID ${report.native.ownerPid}`
+              : '未检测到已验证的原生连接'}
+          </dd>
+        </div>
+        {installation ? (
+          <>
+            <div>
+              <dt>Codex 版本</dt>
+              <dd>{installation.appServerVersion ?? '未读取到版本'}</dd>
+            </div>
+            <div className="diagnostic-desktop-path">
+              <dt>Codex 路径</dt>
+              <dd><code>{installation.appServerExecutable}</code></dd>
+            </div>
+            {installation.desktopExecutable ? (
+              <div className="diagnostic-desktop-path">
+                <dt>桌面程序路径</dt>
+                <dd><code>{installation.desktopExecutable}</code></dd>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </dl>
+      <div className="diagnostic-desktop-processes">
+        <h4>桌面进程</h4>
+        <p>{desktops.length ? `检测到 ${desktops.length} 个桌面进程` : '未检测到运行中的官方桌面进程。'}</p>
+        {desktops.length ? (
+          <ul>
+            {desktops.map((desktop) => (
+              <li key={desktop.pid}>
+                <strong>{desktop.name} · PID {desktop.pid}</strong>
+                <code>{desktop.executable ?? '无法读取进程路径'}</code>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+      <p className="diagnostic-result-note">本次检查仅读取本机环境，未发送模型请求。</p>
     </>
   );
 }

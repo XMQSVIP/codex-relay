@@ -18,6 +18,12 @@
 
 .quota-benefits{display:grid;gap:4px;font-size:12px;overflow-wrap:anywhere}.quota-reset-cards{padding-left:18px;font-size:12px}.quota-reset-cards li{margin:8px 0;overflow-wrap:anywhere}
 
+.capability-details>summary{min-height:44px;padding:10px 12px;border:1px solid var(--control-border);border-radius:6px;background:var(--surface-subtle);color:var(--link);font-weight:550}
+.capability-details>summary:hover,.capability-details>summary:active{background:var(--selected);border-color:var(--link)}
+.capability-details-action{margin-left:auto;flex-shrink:0;font-size:12px;font-weight:400}
+.capability-details .capability-collapse-label,.capability-details[open] .capability-expand-label{display:none}
+.capability-details[open] .capability-collapse-label{display:inline}
+
 /* Shared settings grid keeps section titles, fields and actions in one flow. */
 .account-detail-layout{width:100%;min-width:0;margin-inline:0}
 .account-detail-layout .account-detail-section{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;align-items:stretch;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
