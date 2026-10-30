@@ -1,0 +1,18 @@
+{
+  "listeners": [
+    {
+      "listen": "0.0.0.0:4318",
+      "baseUrls": ["http://192.168.1.10:4318/v1"],
+      "allowedOrigins": []
+    },
+    {
+      "listen": "0.0.0.0:4319",
+      "baseUrls": ["https://bridge.example.com:4319/v1"],
+      "allowedOrigins": ["https://client.example.com"],
+      "tls": {
+        "certificate": "certs/fullchain.pem",
+        "privateKey": "certs/private-key.pem"
+      }
+    }
+  ]
+}

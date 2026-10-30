@@ -1,0 +1,7 @@
+.key-toolbar-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto}
+.key-transfer-form{display:flex;flex-direction:column;gap:10px;padding:0 24px 24px}
+.key-transfer-form textarea{width:100%;resize:vertical;font-family:var(--font-mono,monospace);font-size:13px;overflow-wrap:anywhere}
+.key-transfer-form .key-dialog-actions{margin-top:10px}
+.retention-settings{padding:24px;margin-bottom:20px}
+.retention-settings .connection-limit-form{max-width:640px;margin-top:18px}
+@media(max-width:600px){.key-toolbar-actions{width:100%;margin-left:0}.key-toolbar-actions>.button{flex:1;white-space:nowrap}.key-transfer-form{padding:0 16px 16px}.retention-settings{padding:18px}}

@@ -1,0 +1,207 @@
+name: Build portable packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            rustflags: '-C target-feature=+crt-static'
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            rustflags: ''
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      PYTHONUTF8: '1'
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Set up pnpm from package.json
+        uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+        with:
+          run_install: false
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up native Rust toolchain
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup override set stable
+          rustc --version
+          rustc -vV | grep -F "host: $RUST_TARGET"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          key: portable-${{ matrix.platform }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+
+      - name: Check portable payload and cleanup
+        run: python scripts/test_package_layout.py
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend types and build
+        shell: bash
+        run: |
+          pnpm typecheck
+          pnpm build:web
+
+      - name: Build and package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node scripts/cargo-with-memory.mjs build --release --locked -j1
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          python scripts/package_portable.py
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+
+      - name: Verify Windows portable archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .cache | Out-Null
+          $archives = @(Get-ChildItem dist -Filter 'CodexRelay-*-windows-x64-*.zip')
+          if ($archives.Count -ne 1) { throw 'Expected exactly one portable ZIP' }
+          python scripts/test_portable.py $archives[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Portable smoke test failed' }
+          Copy-Item .cache/portable-validation.json "$($archives[0].FullName).validation.json"
+
+      - name: Build, package and verify macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          node scripts/cargo-with-memory.mjs build --release --locked -j1
+          # Local ad-hoc signature; no Developer ID required.
+          /usr/bin/codesign --force --sign - target/release/codex-relay
+          python scripts/package_macos.py --skip-build --no-reveal
+
+      - name: Upload verified portable package
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: CodexRelay-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+            dist/*.zip.validation.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Add download link to summary
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          printf '### %s\n\n[Download ZIP, SHA-256 and validation report](%s)\n\nCommit: `%s`\n' \
+            "$PLATFORM" "$ARTIFACT_URL" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish portable release
+    needs: package
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_SHA: ${{ github.sha }}
+      SOURCE_REF: ${{ github.ref }}
+      REF_NAME: ${{ github.ref_name }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Download both verified packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --name "CodexRelay-windows-x64-$SOURCE_SHA" --dir packages
+          gh run download "$RUN_ID" --name "CodexRelay-macos-arm64-$SOURCE_SHA" --dir packages
+          shopt -s nullglob
+          archives=(packages/*.zip)
+          test "${#archives[@]}" -eq 2
+          for archive in "${archives[@]}"; do
+            test -s "$archive.sha256"
+            test -s "$archive.validation.json"
+          done
+
+      - name: Publish release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$REF_NAME"
+          title="$REF_NAME"
+          flags=(--verify-tag)
+          if [[ "$SOURCE_REF" == refs/heads/main ]]; then
+            tag=development
+            title='开发版（最新 main）'
+            flags=(--target "$SOURCE_SHA" --prerelease --latest=false)
+          fi
+          printf 'Commit: `%s`\n\nWindows x64 and macOS Apple Silicon portable packages.\nIncludes SHA-256 checksums and validation reports.\n' "$SOURCE_SHA" > notes.md
+          gh api "repos/$GH_REPO/releases?per_page=100" > releases.json
+          exists=$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' releases.json)
+          if [[ "$exists" == 0 ]]; then
+            gh release create "$tag" packages/* --title "$title" --notes-file notes.md "${flags[@]}"
+          else
+            gh release view "$tag" --json assets --jq '.assets[].name' > old-assets.txt
+            gh release upload "$tag" packages/* --clobber
+            if [[ "$SOURCE_REF" == refs/heads/main ]]; then
+              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/$tag" -f sha="$SOURCE_SHA" -F force=true
+              gh release edit "$tag" --title "$title" --notes-file notes.md --prerelease --latest=false
+            fi
+            while IFS= read -r asset; do
+              if [[ -n "$asset" && ! -f "packages/$asset" ]]; then
+                gh release delete-asset "$tag" "$asset" --yes
+              fi
+            done < old-assets.txt
+          fi
+          printf '### Release\n\n%s/releases/tag/%s\n' "https://github.com/$GH_REPO" "$tag" >> "$GITHUB_STEP_SUMMARY"

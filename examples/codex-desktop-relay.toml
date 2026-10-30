@@ -1,0 +1,12 @@
+# Merge into the CLIENT's Codex configuration. Keep the relay SERVER account
+# configured with the real model provider, otherwise a relay loop is rejected.
+model = "gpt-6.1-sol"
+model_provider = "codex_bridge"
+
+[model_providers.codex_bridge]
+name = "Codex bridge"
+base_url = "http://127.0.0.1:4317/v1"
+wire_api = "responses"
+env_key = "CODEX_BRIDGE_API_KEY"
+requires_openai_auth = false
+supports_websockets = true

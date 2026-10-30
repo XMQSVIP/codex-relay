@@ -1,0 +1,5 @@
+.account-login-flow .form-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.account-login-flow .login-result h3{margin-bottom:10px}
+.account-login-flow .login-result>.button,.account-login-flow .login-result>.text-button{margin-top:12px;margin-right:10px}
+.account-login-flow .account-field textarea{display:block;width:100%;margin:8px 0;overflow-wrap:anywhere}
+.account-login-flow .field-error,.account-login-flow .helper{overflow-wrap:anywhere}

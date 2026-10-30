@@ -1,0 +1,53 @@
+.account-transfer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 24px 24px;
+}
+.account-transfer-form textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.account-transfer-form .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.account-import-preview {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+.account-import-preview ul {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 240px;
+  overflow: auto;
+}
+.account-import-preview li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+.account-import-preview li + li {
+  border-top: 1px solid var(--line);
+}
+.account-import-preview li span {
+  color: var(--muted);
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .account-transfer-form {
+    padding: 0 16px 16px;
+  }
+  .account-transfer-form .row-actions > button {
+    flex: 1;
+  }
+}

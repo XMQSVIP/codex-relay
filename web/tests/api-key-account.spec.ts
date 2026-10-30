@@ -1,0 +1,94 @@
+import { test, expect } from '@playwright/test';
+import { mockConsole, groupId } from './fixtures';
+
+test('restored API account can be activated without entering the key again', async ({ page }) => {
+  const state = await mockConsole(page, { count: 0 });
+  const id = '10000000-0000-0000-0000-000000000004';
+  state.data.accounts.push({ id, name: '恢复的上游', source: 'api-key', credentialSource: 'api-key', upstream: { baseUrl: 'https://restored.example/v1', transport: 'ws-first', hasApiKey: true }, createdAt: Date.now(), state: 'stopped', pid: null, account: null });
+  state.data.operations.accounts.push({ id, name: '恢复的上游', groupIds: [groupId], enabled: false, maxConcurrency: 3, active: 0, queued: 0 });
+  await page.goto(`/?view=accounts&account=${id}&section=access`);
+  await expect(page.getByRole('switch', { name: /恢复的上游/ })).toBeEnabled();
+  await page.getByRole('link', { name: '上游配置', exact: true }).click();
+  await expect(page.getByLabel('基础 URL')).toHaveValue('https://restored.example/v1');
+  await expect(page.getByRole('radio', { name: 'WS 优先' })).toBeChecked();
+  await expect(page.getByLabel('API 密钥（留空保留）')).toHaveValue('');
+  await page.getByRole('link', { name: '接入与调度', exact: true }).click();
+  await expect(page.getByRole('switch', { name: /恢复的上游/ })).toBeEnabled();
+  expect(state.data.operations.accounts[0].enabled).toBe(false);
+  await page.getByRole('switch', { name: /恢复的上游/ }).click();
+  await expect(page.getByRole('switch', { name: /恢复的上游/ })).toHaveAttribute('aria-checked', 'true');
+  expect(state.writes.filter(write => write.path.endsWith('/upstream'))).toHaveLength(0);
+});
+
+test('imports a masked API key without native installation and waits for manual activation', async ({ page }) => {
+  const state = await mockConsole(page, { count: 0 }); state.data.installation = null;
+  await page.goto('/?view=accounts');
+  await page.getByRole('button', { name: '添加账户', exact: true }).click();
+  await page.getByRole('radio', { name: 'API Key', exact: true }).check();
+  await page.getByLabel('账户名称', { exact: true }).fill('上游测试');
+  await page.getByRole('button', { name: '导入 API Key 账户' }).click();
+  await expect(page.getByText('请输入有效的 API 密钥。', { exact: true })).toBeVisible();
+  await page.getByLabel('基础 URL').fill('https://example.test/custom/v1');
+  await page.getByLabel('API 密钥', { exact: false }).fill('sk-private-test');
+  await expect(page.getByLabel('API 密钥', { exact: false })).toHaveAttribute('type', 'password');
+  await page.getByRole('radio', { name: 'WS 优先' }).check();
+  if (process.env.BRIDGE_CAPTURE_UI) await page.getByRole('dialog').screenshot({ path: test.info().outputPath('api-key-import.png') });
+  await page.getByRole('button', { name: '导入 API Key 账户' }).click();
+  await expect(page.locator('.detail-heading h2')).toHaveText('上游测试');
+  expect(state.data.operations.accounts[0].enabled).toBe(false);
+  expect(state.writes.find(w => w.path === '/accounts')?.body).toMatchObject({ source: 'api-key', upstream: { apiKey: 'sk-private-test', transport: 'ws-first' } });
+  await expect(page.getByText('先检测原生安装', { exact: true })).toHaveCount(0);
+  const activation = page.getByRole('switch', { name: /上游测试/ });
+  await expect(activation).toBeEnabled();
+  await page.getByRole('link', { name: '上游配置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '使用 ChatGPT 登录', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('API 密钥（留空保留）')).toHaveValue('');
+  await page.getByLabel('基础 URL').fill('https://next.example.test/v1');
+  await page.getByRole('button', { name: '保存上游配置' }).click();
+  await expect.poll(() => state.writes.filter(w => w.path.endsWith('/upstream')).length).toBe(1);
+  expect(state.writes.find(w => w.path.endsWith('/upstream'))?.body).not.toHaveProperty('apiKey');
+  await page.getByRole('link', { name: '运行信息', exact: true }).click();
+  await expect(page.getByRole('region', { name: '账户运行状态', exact: true })).toContainText('上游连接');
+  await expect(page.getByRole('button', { name: '测试对话：上游测试', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '当前 clientInfo', exact: true })).toHaveCount(0);
+  await page.getByRole('link', { name: '返回账户列表', exact: true }).click();
+  await page.getByRole('button', { name: '展开详情：上游测试', exact: true }).click();
+  await expect(page.getByRole('button', { name: '刷新额度', exact: true })).toHaveCount(0);
+});
+
+test('API import retries list refresh without resubmitting the secret', async ({ page }) => {
+  const state = await mockConsole(page, { count: 0 });
+  await page.goto('/?view=accounts');
+  await page.getByRole('button', { name: '添加账户', exact: true }).click();
+  await page.getByRole('radio', { name: 'API Key', exact: true }).check();
+  await page.getByLabel('账户名称', { exact: true }).fill('只导入一次');
+  await page.getByLabel('基础 URL').fill('https://example.test/v1');
+  await page.getByLabel('API 密钥', { exact: false }).fill('sk-private-test');
+  state.offline = true;
+  await page.getByRole('button', { name: '导入 API Key 账户' }).click();
+  await expect(page.getByRole('alert')).toContainText('账户已创建，但列表刷新失败');
+  state.offline = false;
+  await page.getByRole('button', { name: '重试刷新账户' }).click();
+  await expect(page.locator('.detail-heading h2')).toHaveText('只导入一次');
+  expect(state.writes.filter(w => w.path === '/accounts')).toHaveLength(1);
+});
+
+test('API key form stays usable on a narrow dark viewport', async ({ page }) => {
+  await mockConsole(page, { count: 0 });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.goto('/?view=accounts');
+  await page.getByRole('button', { name: '添加账户', exact: true }).click();
+  await page.getByRole('radio', { name: 'API Key', exact: true }).check();
+  const dialog = page.getByRole('dialog');
+  expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+  await page.getByLabel('账户名称', { exact: true }).fill('移动端上游');
+  await page.getByLabel('基础 URL').fill('https://example.test/v1');
+  await page.getByLabel('API 密钥', { exact: false }).fill('sk-mobile-test');
+  const submit = page.getByRole('button', { name: '导入 API Key 账户' });
+  await submit.scrollIntoViewIfNeeded();
+  await expect(submit).toBeVisible();
+  if (process.env.BRIDGE_CAPTURE_UI) await dialog.screenshot({ path: test.info().outputPath('api-key-mobile-dark.png') });
+  await submit.click();
+  await expect(page.locator('.detail-heading h2')).toHaveText('移动端上游');
+});

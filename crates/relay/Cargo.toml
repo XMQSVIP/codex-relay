@@ -1,0 +1,48 @@
+[package]
+name = "codex-relay"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "json"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+tokio-stream = "0.1"
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", features = ["sink"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+ring = "0.17.14"
+hex = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+bytes = "1"
+multer = "3"
+flate2 = "1"
+zstd = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+url = "2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+fs2 = "0.4.3"
+if-addrs = "0.15"
+tempfile = "3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10"
+roxmltree = "0.21"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Networking_WinHttp"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

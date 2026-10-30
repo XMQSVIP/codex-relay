@@ -1,0 +1,32 @@
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sidebar-footer > .sidebar-version {
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  margin: 0;
+  padding: 0 0 0 10px;
+  border: 0;
+}
+
+.sidebar-stop-service {
+  flex-shrink: 0;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  color: var(--muted);
+}
+
+.sidebar-stop-service:hover:not(:disabled) {
+  color: var(--error);
+  background: var(--error-bg);
+  border-color: var(--error);
+}

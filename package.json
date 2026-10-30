@@ -1,0 +1,58 @@
+{
+  "name": "codex-relay",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Rust native Codex relay with a React account console",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "start": "node scripts/cargo-with-memory.mjs run --release --locked -- serve",
+    "start:debug": "node scripts/cargo-with-memory.mjs run -- serve",
+    "dev:web": "pnpm --filter @codex-relay/console dev",
+    "build:web": "pnpm --filter @codex-relay/console build",
+    "doctor": "node scripts/cargo-with-memory.mjs run -- doctor",
+    "inspect": "node scripts/cargo-with-memory.mjs run -- inspect",
+    "prepare:desktop": "node scripts/cargo-with-memory.mjs run -- prepare",
+    "probe:shared": "node scripts/cargo-with-memory.mjs run -- probe shared",
+    "probe:guard": "node scripts/cargo-with-memory.mjs run -- probe guard",
+    "probe:stream": "node scripts/cargo-with-memory.mjs run -- probe stream",
+    "inspect:provider": "node scripts/cargo-with-memory.mjs run -- inspect-provider",
+    "probe:provider": "node scripts/cargo-with-memory.mjs run -- probe provider",
+    "start:shared": "node scripts/cargo-with-memory.mjs run -- launch",
+    "status:shared": "node scripts/cargo-with-memory.mjs run -- status",
+    "typecheck": "pnpm --filter @codex-relay/console typecheck",
+    "build": "pnpm build:web && node scripts/cargo-with-memory.mjs build",
+    "build:release": "pnpm build:web && node scripts/cargo-with-memory.mjs build --release --locked",
+    "test": "node scripts/cargo-with-memory.mjs test",
+    "check": "pnpm check:rust && pnpm test:contracts && pnpm check:web",
+    "check:quick": "pnpm check:quick:rust && pnpm check:quick:web",
+    "check:quick:rust": "pnpm test:build-memory && cargo fmt --check",
+    "check:quick:web": "pnpm test:web-workers && pnpm check:format:web && pnpm typecheck",
+    "test:web-workers": "node --import tsx --test scripts/test_web_workers.mjs",
+    "check:rust": "pnpm test:build-memory && cargo fmt --check && node scripts/cargo-with-memory.mjs clippy --locked --all-targets -- -D warnings && node scripts/cargo-with-memory.mjs test --locked --no-fail-fast",
+    "check:web": "pnpm test:web-workers && pnpm check:format:web && pnpm typecheck && pnpm build:web && pnpm test:web",
+    "test:contracts": "node scripts/test-admin-contracts.mjs",
+    "format:web": "prettier --write \"web/src/{api,AccountDetails,AccountScheduling,Statistics,UsageRankings,AccountImport,AccountCredentialExport,accountBackup}.{ts,tsx}\" web/contracts web/tests/api-contract.spec.ts web/tests/account-transfer.spec.ts web/src/account-transfer.css scripts/test-admin-contracts.mjs",
+    "check:format:web": "prettier --check \"web/src/{api,AccountDetails,AccountScheduling,Statistics,UsageRankings,AccountImport,AccountCredentialExport,accountBackup}.{ts,tsx}\" web/contracts web/tests/api-contract.spec.ts web/tests/account-transfer.spec.ts web/src/account-transfer.css scripts/test-admin-contracts.mjs",
+    "legacy:cli": "tsx legacy/src/cli.ts",
+    "legacy:test": "tsx --test legacy/test/*.test.ts",
+    "legacy:check": "tsc -p legacy/tsconfig.json --noEmit && pnpm legacy:test",
+    "test:web": "pnpm --filter @codex-relay/console test",
+    "check:memory": "node scripts/cargo-with-memory.mjs --memory-check",
+    "test:build-memory": "node --test scripts/test_cargo_memory.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/ws": "^8.18.1",
+    "prettier": "3.9.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
