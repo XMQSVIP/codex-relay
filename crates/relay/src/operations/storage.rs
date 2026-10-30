@@ -11,6 +11,16 @@ use std::{
 };
 use tokio::sync::Notify;
 
+pub(super) struct DirectoryLock(pub(super) std::fs::File);
+
+impl Drop for DirectoryLock {
+    fn drop(&mut self) {
+        // Release explicitly: a concurrently spawned child may temporarily hold
+        // an inherited descriptor until exec closes it on Unix.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 pub(super) fn storage(_: rusqlite::Error) -> Error {
     Error::new("OPERATIONS_STORAGE", "运行数据读写失败。")
 }
@@ -46,6 +56,7 @@ impl Operations {
             .open(root.join("operations.lock"))?;
         fs2::FileExt::try_lock_exclusive(&lock)
             .map_err(|_| Error::new("OPERATIONS_LOCKED", "已有管理服务使用这份运行数据。"))?;
+        let lock = DirectoryLock(lock);
         let db = Connection::open(root.join("operations.sqlite3")).map_err(storage)?;
         db.busy_timeout(Duration::from_millis(500))
             .map_err(storage)?;
@@ -107,6 +118,21 @@ impl Operations {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_lock_releases_even_when_a_duplicate_descriptor_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let ops = Operations::open(dir.path()).unwrap();
+        let duplicate = ops._lock.0.try_clone().unwrap();
+        assert!(matches!(Operations::open(dir.path()), Err(e) if e.code == "OPERATIONS_LOCKED"));
+        drop(ops);
+        let reopened = Operations::open(dir.path()).unwrap();
+        drop(duplicate);
+        assert!(matches!(Operations::open(dir.path()), Err(e) if e.code == "OPERATIONS_LOCKED"));
+        drop(reopened);
+        assert!(Operations::open(dir.path()).is_ok());
+    }
 
     #[test]
     fn statistics_and_account_metrics_do_not_take_the_admission_lock() {

@@ -8,7 +8,6 @@ use crate::error::Error;
 use rusqlite::Connection;
 use std::{
     collections::{HashMap, VecDeque},
-    fs::File,
     sync::{Arc, Mutex, OnceLock},
     time::Instant,
 };
@@ -115,7 +114,7 @@ pub struct Operations {
     history_db: Mutex<Connection>,
     history_queries: Arc<tokio::sync::Semaphore>,
     changed: Arc<Notify>,
-    _lock: File,
+    _lock: storage::DirectoryLock,
 }
 pub struct Lease {
     pub provider: Option<crate::provider::Provider>,
