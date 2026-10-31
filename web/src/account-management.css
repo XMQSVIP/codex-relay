@@ -147,3 +147,25 @@
   .account-list-page .account-concurrency-cell{grid-column:1;grid-row:3}
   .account-list-page .account-row-actions{grid-column:1/-1;grid-row:5;grid-template-columns:repeat(4,44px);gap:8px}
 }
+
+/* Keep selection available in the header on both table and card layouts. */
+.account-list-page .account-search{min-width:180px;width:230px}
+.account-select-heading{display:flex;align-items:center;gap:8px;margin:0;min-height:32px;font-size:12px;color:var(--muted)}
+.account-select-heading input{width:16px;height:16px;margin:0;flex-shrink:0;accent-color:var(--link)}
+.account-batch-actions{position:relative}
+.account-batch-options{position:absolute;top:calc(100% + 4px);left:0;z-index:10;display:flex;flex-direction:column;min-width:160px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px #0002}
+.account-batch-options .text-button{justify-content:flex-start;min-height:44px;padding:8px 12px;white-space:nowrap}
+.account-batch-options .text-button:hover{background:var(--surface-subtle)}
+@media(max-width:1360px){
+  .account-list-page .account-column-headings{display:flex}
+  .account-list-page .account-column-headings>span{display:none}
+}
+@media(max-width:760px){
+  .account-list-page .account-search{width:100%;min-width:0}
+  .account-list-page .account-column-headings{padding-inline:12px}
+}
+
+.account-list-page .account-console-toolbar{gap:10px;align-items:center}
+.account-console-toolbar .account-batch-toolbar{padding:0;gap:8px;min-width:0}
+.account-console-toolbar .account-batch-toolbar>span{white-space:nowrap}
+.account-console-toolbar .account-refresh-button{min-width:0;padding-inline:8px}

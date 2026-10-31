@@ -2,7 +2,7 @@ import { accountGroupIds, availableAccountGroup, sameGroups } from './accountMem
 import { AccountGroupControl } from './AccountGroups';
 import { useToast } from './Toast';
 import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowRight, Layers3, LoaderCircle, Search, Settings2, ShieldCheck, Users } from 'lucide-react';
+import { ArrowRight, LoaderCircle, Search, Settings2, ShieldCheck, Users } from 'lucide-react';
 import { api } from './api';
 import type { Account, AccountPolicy, Group, Overview } from './api';
 import { nativeAuthLabel } from './nativeAuth';
@@ -139,6 +139,12 @@ export function Accounts({ data, token, disabled, reload }: { data: Overview; to
   });
   const pages = Math.max(1, Math.ceil(visible.length / 20));
   const currentPage = Math.min(page, pages);
+  const pageAccounts = visible.slice((currentPage - 1) * 20, currentPage * 20);
+  const selectedOnPage = pageAccounts.filter(account => selected.includes(account.id)).length;
+  const selectPage = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectPage.current) selectPage.current.indeterminate = selectedOnPage > 0 && selectedOnPage < pageAccounts.length;
+  }, [selectedOnPage, pageAccounts.length]);
   const busy = disabled || !!pending;
   useEffect(() => {
     if (location.hash.startsWith('#account-')) document.getElementById(location.hash.slice(1))?.focus();
@@ -194,16 +200,15 @@ export function Accounts({ data, token, disabled, reload }: { data: Overview; to
         <label className="account-search"><Search size={17} aria-hidden="true" /><span className="sr-only">搜索账户</span><input type="search" placeholder="搜索名称、邮箱或分组" value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} disabled={!!pending} /></label>
         <label className="account-filter-select"><span className="visually-hidden">筛选账户状态</span><select aria-label="筛选账户状态" value={filter} onChange={event => { setFilter(event.target.value); setPage(1); }}>{[['all', '全部状态'], ['available', '可调度'], ['limited', '暂时受限'], ['pending', '待处理'], ['disabled', '已停用'], ['paused', '分组已暂停'], ['unconfigured', '待配置'], ['running', '运行中']].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         <label className="account-filter-select"><span className="visually-hidden">筛选所属分组</span><select aria-label="筛选所属分组" value={groupFilter} onChange={event => { setGroupFilter(event.target.value); setPage(1); }}><option value="">全部分组</option>{data.operations.groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
-        <div className="account-list-count" role="status" aria-atomic="true"><span>显示 {visible.length} 个账户</span></div>
-        <div className="account-heading-actions"><button type="button" className="text-button account-refresh-button" disabled={busy || refreshing} aria-busy={refreshing} onClick={() => void refreshAccounts()}>{refreshing ? <LoaderCircle size={15} className="spin" aria-hidden="true" /> : null}{refreshing ? '正在刷新账号数据…' : '刷新账号数据'}</button><a href="?view=groups" className="text-button"><Layers3 size={15} aria-hidden="true" />管理分组</a><AccountImport token={token} operations={data.operations} disabled={busy || data.operations.draining || !data.operations.storageHealthy} reload={reload} /><CreateAccount token={token} disabled={busy || data.operations.draining} operations={data.operations} accounts={data.accounts} onChange={reload} /></div>
+        {!selected.length ? <div className="account-list-count" role="status" aria-atomic="true"><span>显示 {visible.length} 个账户</span></div> : null}
+        <AccountBatch token={token} accounts={pool} operations={data.operations} selected={selected} clear={() => setSelected([])} reload={reload} disabled={busy || data.operations.draining} />
+        <div className="account-heading-actions"><button type="button" className="text-button account-refresh-button" disabled={busy || refreshing} aria-busy={refreshing} onClick={() => void refreshAccounts()}>{refreshing ? <LoaderCircle size={15} className="spin" aria-hidden="true" /> : null}{refreshing ? '正在刷新账号数据…' : '刷新账号数据'}</button><AccountImport token={token} operations={data.operations} disabled={busy || data.operations.draining || !data.operations.storageHealthy} reload={reload} /><CreateAccount token={token} disabled={busy || data.operations.draining} operations={data.operations} accounts={data.accounts} onChange={reload} /></div>
         {query || filter !== 'all' || groupFilter ? <button className="text-button" onClick={() => { setQuery(''); setFilter('all'); setGroupFilter(''); setPage(1); }}>清除筛选</button> : null}
       </div>
-      <AccountBatch token={token} accounts={pool} operations={data.operations} selected={selected} clear={() => setSelected([])} reload={reload} disabled={busy || data.operations.draining} />
-      {visible.length ? <label className="batch-page-select"><input type="checkbox" aria-label="选择当前页全部账号" checked={visible.slice((currentPage - 1) * 20, currentPage * 20).every(a => selected.includes(a.id))} onChange={event => { const ids = visible.slice((currentPage - 1) * 20, currentPage * 20).map(a => a.id); setSelected(old => event.target.checked ? [...new Set([...old, ...ids])] : old.filter(id => !ids.includes(id))); }} />选择当前页</label> : null}
       {data.accounts.length ? <>
         {metrics.error ? <p className="message error" role="alert">{metrics.error}</p> : null}
-        <div className="account-column-headings" aria-hidden="true"><span>账户</span><span>周期用量</span><span>订阅</span><span>所属分组</span><span>接入状态</span><span>账户并发</span><span>今日 Token</span><span>操作</span></div>
-        <ul className="account-console-list">{visible.slice((currentPage - 1) * 20, currentPage * 20).map(account => {
+        <div className="account-column-headings"><label className="account-select-heading"><input ref={selectPage} type="checkbox" aria-label="选择当前页全部账号" disabled={!pageAccounts.length} checked={pageAccounts.length > 0 && selectedOnPage === pageAccounts.length} onChange={event => { const ids = pageAccounts.map(account => account.id); setSelected(old => event.target.checked ? [...new Set([...old, ...ids])] : old.filter(id => !ids.includes(id))); }} /><span>账户</span></label><span>周期用量</span><span>订阅</span><span>所属分组</span><span>接入状态</span><span>账户并发</span><span>今日 Token</span><span>操作</span></div>
+        <ul className="account-console-list">{pageAccounts.map(account => {
           const policy = policies.get(account.id);
           const group = availableAccountGroup(policy, data.operations.groups);
           const login = loginStatus(account, policy);

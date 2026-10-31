@@ -94,6 +94,7 @@ test('batch configuration sends multiple memberships and details preserve them w
   });
   await page.goto('/');
   await page.getByRole('checkbox', { name: '选择账号：本机 Codex' }).check();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('button', { name: '批量配置', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('checkbox', { name: '修改所属分组' }).check();

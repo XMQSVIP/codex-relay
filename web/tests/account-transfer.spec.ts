@@ -103,6 +103,7 @@ test('batch export restores only supported import fields and displays partial re
   });
   await page.goto('/?view=accounts');
   await page.getByRole('checkbox', { name: '选择当前页全部账号' }).check();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('button', { name: '导出账户备份', exact: true }).click();
   const downloadEvent = page.waitForEvent('download');
   await page.getByRole('button', { name: '确认下载账户备份' }).click();

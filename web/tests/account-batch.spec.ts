@@ -4,14 +4,15 @@ import { mockConsole, nativeId } from './fixtures';
 test('selection persists across pages and clears when filters change', async ({ page }) => {
   await mockConsole(page, { count: 25 });
   await page.goto('/?view=accounts');
-  await page.getByRole('checkbox', { name: '选择当前页全部账号' }).check();
+  await expect(page.getByRole('link', { name: '管理分组', exact: true })).toHaveCount(0);
+  await page.locator('.account-column-headings').getByRole('checkbox', { name: '选择当前页全部账号' }).check();
   await expect(page.getByText('已选 20 个', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '下一页' }).click();
   await expect(page.getByText('已选 20 个', { exact: true })).toBeVisible();
-  await page.getByRole('checkbox', { name: '选择当前页全部账号' }).check();
+  await page.locator('.account-column-headings').getByRole('checkbox', { name: '选择当前页全部账号' }).check();
   await expect(page.getByText('已选 25 个', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: '筛选账户状态', exact: true }).selectOption('available');
-  await expect(page.getByRole('button', { name: '批量配置', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '更多', exact: true })).toHaveCount(0);
 });
 
 test('batch configuration submits only modified fields and renders direct results', async ({ page }) => {
@@ -23,6 +24,16 @@ test('batch configuration submits only modified fields and renders direct result
   });
   await page.goto('/?view=accounts');
   await page.getByRole('checkbox', { name: '选择账号：本机 Codex', exact: true }).check();
+  await expect(page.getByRole('checkbox', { name: '选择当前页全部账号' })).toBeChecked({ indeterminate: true });
+  const more = page.getByRole('button', { name: '更多', exact: true });
+  await expect(page.getByRole('button', { name: '批量配置', exact: true })).toHaveCount(0);
+  await more.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: '批量删除', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(more).toBeFocused();
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await more.click();
   await page.getByRole('button', { name: '批量配置', exact: true }).click();
   await page.getByRole('spinbutton', { name: '账户并发上限', exact: true }).fill('7');
   await page.getByRole('button', { name: '提交配置' }).click();
