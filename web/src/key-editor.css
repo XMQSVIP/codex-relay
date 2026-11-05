@@ -1,0 +1,31 @@
+.key-edit-dialog { width: min(640px, calc(100vw - 32px)); }
+.key-edit-dialog > .section-heading { align-items: flex-start; padding-bottom: 24px; }
+.key-edit-dialog .key-dialog-close { min-width: 44px; min-height: 44px; padding: 8px; }
+.key-edit-dialog .key-form { gap: 20px; }
+.key-edit-field { min-width: 0; }
+.key-edit-field > label { margin: 0 0 8px; }
+.key-edit-field > input, .key-edit-field > select { width: 100%; min-height: 44px; }
+.key-edit-field > .helper { margin: 8px 0 0; font-size: 12px; }
+.key-edit-routing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.key-edit-models { display: flex; align-items: baseline; gap: 16px; font-size: 13px; }
+.key-edit-models dt { flex-shrink: 0; }
+.key-edit-models dd { margin: 0; min-width: 0; color: var(--secondary); overflow-wrap: anywhere; }
+.key-edit-dialog .key-fast-setting { border-top: 1px solid var(--line); padding-top: 12px; }
+.key-edit-dialog .key-fast-setting .checkbox-label { display: flex; flex-direction: row-reverse; justify-content: space-between; gap: 16px; min-height: 44px; margin: 0; }
+.key-edit-dialog .key-fast-setting .helper { margin: 0; padding-right: 58px; font-size: 12px; }
+.key-edit-dialog .key-fast-setting input { appearance: none; position: relative; width: 40px; height: 24px; padding: 2px; margin: 0; border-radius: 999px; background: var(--control-border); border: 1px solid var(--control-border); cursor: pointer; }
+.key-edit-dialog .key-fast-setting input::before { content: ''; display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); }
+.key-edit-dialog .key-fast-setting input:checked { background: var(--accent); border-color: var(--accent); }
+.key-edit-dialog .key-fast-setting input:checked::before { transform: translateX(16px); background: var(--on-accent); }
+.key-edit-dialog .key-fast-setting input:disabled { opacity: .5; cursor: not-allowed; }
+.key-edit-dialog .key-dialog-actions { margin-top: 0; padding-top: 16px; }
+.key-edit-dialog .key-dialog-actions .button { min-height: 44px; }
+@media (max-width: 560px) {
+  .key-edit-routing { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .key-edit-dialog .key-form { gap: 18px; }
+  .key-edit-dialog .key-fast-setting .helper { padding-right: 0; }
+}
+@media (forced-colors: active) {
+  .key-edit-dialog .key-fast-setting input { appearance: auto; }
+  .key-edit-dialog .key-fast-setting input::before { display: none; }
+}

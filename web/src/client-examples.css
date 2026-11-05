@@ -1,0 +1,18 @@
+.client-example-heading { gap: 8px; }
+.client-example .example-switch button,
+.client-example .copy-button { min-height: 44px; }
+.client-example .copy-button { min-width: 44px; flex-shrink: 0; }
+.client-multiturn-intro,
+.client-multiturn-rules { padding: 4px 24px 20px; font-size: 13px; overflow-wrap: anywhere; }
+.client-multiturn-intro { display: grid; gap: 12px; }
+.client-multiturn-endpoint { display: block; color: var(--link); }
+.client-multiturn-replace { padding-left: 12px; border-left: 2px solid var(--control-border); color: var(--secondary); }
+.client-multiturn-rules { padding-top: 20px; }
+.client-multiturn-rules ul { padding-left: 20px; margin: 10px 0; }
+.client-multiturn-rules li + li,
+.client-multiturn-rules p + p { margin-top: 8px; }
+.client-multiturn-rules p { color: var(--muted); }
+@media (max-width: 760px) {
+  .client-multiturn-intro,
+  .client-multiturn-rules { padding-inline: 20px; }
+}

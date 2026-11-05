@@ -1,0 +1,3 @@
+.location-preview{padding:16px;margin:16px 0;border:1px solid var(--line);border-radius:6px;background:var(--selected);overflow-wrap:anywhere}
+.location-preview>p{margin:8px 0}
+.location-preview>.text-button{min-height:44px}

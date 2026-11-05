@@ -1,0 +1,24 @@
+.key-usage-unavailable{max-width:230px}
+.key-usage-dialog{width:min(760px,calc(100vw - 32px))}
+.key-usage-dialog .section-heading{align-items:flex-start}
+.key-usage-dialog .section-heading>div{min-width:0;overflow-wrap:anywhere}
+.key-usage-fields{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:20px}
+.key-usage-fields select{width:100%}
+.key-usage-options{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:20px 0 14px}
+.key-usage-preview{border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface-subtle)}
+.key-usage-preview-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.key-usage-preview-heading code{min-width:0;font-size:12px}
+.key-usage-preview-heading span{flex-shrink:0;font-size:12px;color:var(--muted)}
+.key-usage-preview textarea{display:block;border:0;border-radius:0;resize:vertical;min-height:220px;max-height:50dvh;padding:14px;background:var(--surface-subtle);font:13px/1.7 Consolas,"Cascadia Code",monospace;overflow-wrap:anywhere}
+.key-usage-preview textarea:focus-visible{outline-offset:-3px}
+.key-usage-instructions{margin-top:16px;color:var(--muted);font-size:13px;line-height:1.75}
+.key-usage-instructions p+p{margin-top:8px}
+.key-usage-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+@media(max-width:760px){
+  .key-usage-unavailable{max-width:none}
+  .key-usage-dialog{padding:20px}
+  .key-usage-fields{grid-template-columns:minmax(0,1fr);gap:16px}
+  .key-usage-options .example-switch button,.key-usage-options .checkbox-label,.key-usage-dialog .button{min-height:44px}
+  .key-usage-preview-heading{flex-wrap:wrap}
+  .key-usage-preview textarea{font-size:12px}
+}

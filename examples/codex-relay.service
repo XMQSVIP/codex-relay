@@ -1,0 +1,23 @@
+[Unit]
+Description=Codex Relay
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=codex-relay
+Group=codex-relay
+WorkingDirectory=/opt/codex-relay
+Environment=HOME=/opt/codex-relay
+EnvironmentFile=-/etc/codex-relay.env
+ExecStart=/opt/codex-relay/start-linux.sh --require-admin-token
+Restart=on-failure
+RestartSec=5
+# SIGTERM reaches the relay first, allowing it to drain requests and stop workers.
+# After the timeout, systemd also removes any remaining descendants in the cgroup.
+KillMode=mixed
+TimeoutStopSec=90
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+.account-group-trigger{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;min-height:44px;max-width:100%;padding:7px 9px;border:1px solid var(--control-border);border-radius:6px;text-align:left;overflow-wrap:anywhere;background:var(--control,var(--surface))}
+.account-group-trigger>span{font-size:12px;color:var(--link)}
+.account-group-trigger:hover:not(:disabled){border-color:var(--link)}
+.account-group-choices legend{margin-bottom:4px;font-size:13px}
+.account-group-options{display:grid;gap:4px;max-height:320px;overflow:auto;margin:12px 0}
+.account-group-options label{display:flex;align-items:center;gap:10px;min-height:44px;margin:0;padding:6px 8px;border-radius:6px;background:var(--surface-subtle);overflow-wrap:anywhere}
+.account-group-options input{margin:0}
+@media(min-width:761px){.account-group-options{grid-template-columns:repeat(2,minmax(0,1fr))}}

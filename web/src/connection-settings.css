@@ -1,0 +1,243 @@
+.connection-settings-width {
+  max-width: 1440px;
+  margin-inline: auto;
+}
+
+.connection-settings-content {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.connection-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 24px;
+}
+
+.connection-settings-header .text-button {
+  min-height: 44px;
+}
+
+.connection-settings-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.connection-setting-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  padding: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.connection-setting-card:nth-child(even) {
+  border-left: 1px solid var(--line);
+}
+
+.connection-setting-description {
+  min-width: 0;
+}
+
+.connection-setting-description h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+}
+
+.connection-setting-description h3 > svg {
+  color: var(--muted);
+}
+
+.connection-setting-description > .helper {
+  margin-top: 8px;
+  max-width: 32em;
+}
+
+.connection-setting-status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.connection-setting-status strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.connection-setting-meter {
+  display: block;
+  width: 100%;
+  max-width: 240px;
+  height: 5px;
+  margin-top: 8px;
+  appearance: none;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: var(--surface-subtle);
+  accent-color: var(--link);
+}
+
+.connection-setting-meter::-webkit-progress-bar {
+  border-radius: 3px;
+  background: var(--surface-subtle);
+}
+
+.connection-setting-meter::-webkit-progress-value {
+  border-radius: 3px;
+  background: var(--link);
+}
+
+.connection-setting-meter::-moz-progress-bar {
+  border-radius: 3px;
+  background: var(--link);
+}
+
+.connection-settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr;
+  align-items: start;
+  gap: 12px 16px;
+  min-width: 0;
+  flex: 1;
+}
+
+.connection-settings-form > div {
+  min-width: 0;
+}
+
+.connection-settings-form input,
+.connection-settings-form select {
+  width: 100%;
+  min-height: 44px;
+}
+
+.connection-settings-footer {
+  grid-column: 1 / -1;
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+}
+
+.connection-settings-footer > p {
+  flex: 1;
+  margin: 0;
+}
+
+.connection-settings-footer > .button {
+  align-self: flex-end;
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
+.connection-settings-rules {
+  padding: 8px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-subtle);
+  border-radius: 0 0 8px 8px;
+}
+
+.connection-settings-rules > summary {
+  color: var(--secondary);
+  font-size: 13px;
+}
+
+.connection-settings-rules ul {
+  max-width: 100ch;
+  margin: 0 0 12px;
+  padding-left: 22px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.connection-settings-rules li + li {
+  margin-top: 8px;
+}
+
+@media (max-width: 1199px) {
+  .connection-settings-sections {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-setting-card:nth-child(even) {
+    border-left: 0;
+  }
+
+  .connection-setting-card {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.85fr) minmax(0, 1.4fr);
+    gap: 24px;
+  }
+
+  .connection-settings-footer {
+    flex-direction: row;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .connection-settings-footer > p {
+    flex: 1;
+  }
+
+  .connection-settings-footer > .button {
+    align-self: center;
+  }
+}
+
+@media (max-width: 900px) {
+  .connection-setting-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .connection-setting-description > .helper {
+    max-width: 64ch;
+  }
+}
+
+@media (max-width: 760px) {
+  .connection-settings-header,
+  .connection-setting-card {
+    padding: 20px;
+  }
+
+  .connection-settings-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .connection-settings-rules {
+    padding-inline: 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .connection-settings-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-settings-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+
+  .connection-settings-footer > .button {
+    width: 100%;
+  }
+}
