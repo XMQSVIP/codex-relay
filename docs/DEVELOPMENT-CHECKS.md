@@ -88,7 +88,7 @@ pnpm test:web account-activation.spec.ts account-login.spec.ts
 - Ubuntu 安装与锁定 Playwright 版本配套的 Chromium 及系统依赖，再运行 `pnpm check:web`。`CI` 环境下禁止提交 `test.only`。
 - 浏览器检查失败时上传 `.cache/ui-tests/`，保留截图、trace 等证据 7 天。
 
-CI 与本地复用相同的检查命令。便携包仍由独立的 [自动打包工作流](AUTOMATED-PACKAGES.md) 构建与验证；开发检查工作流本身不设置 GitHub 分支保护，也不阻止另一个工作流上传产物。
+CI 与本地复用相同的检查命令。便携包由独立的 [自动打包工作流](AUTOMATED-PACKAGES.md) 构建与验证；开发检查工作流本身不设置 GitHub 分支保护，也不阻止另一个工作流上传产物。`main` 自动创建版本标签及 Release 时，发布任务必须确认同一提交的开发检查通过，再复用该提交的四平台构建产物。
 
 开发检查和便携包工作流缓存 pnpm 下载仓库及 Rust 依赖构建产物。Rust 缓存按平台、工具链、锁文件、Cargo 配置和编译环境隔离，检查与 release 打包使用不同 key；Windows 静态 CRT 参数在缓存恢复前已设置。仅 main 保存缓存，PR 可读取缓存。默认不缓存项目自身的可执行文件和运行数据；首次运行或工具链/依赖变化仍需构建。缓存命中不会跳过测试。
 

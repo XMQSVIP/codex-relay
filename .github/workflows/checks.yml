@@ -44,6 +44,7 @@ jobs:
         shell: bash
         run: |
           python -m unittest discover -s scripts -p test_check_versions.py
+          python -m unittest discover -s scripts -p test_prepare_release.py
           python scripts/test_package_layout.py
 
       - name: Check Linux package boundaries and static ELF validation
