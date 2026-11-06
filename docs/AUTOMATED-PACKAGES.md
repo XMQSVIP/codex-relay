@@ -15,9 +15,9 @@ PR 和 `main` 的源码回归由独立的 `.github/workflows/checks.yml` 执行�
 
 进入仓库 **Actions → Build portable packages → 对应运行 → Artifacts**，选择平台下载。每个下载包含实际便携 ZIP 和 `.sha256` 校验文件；验证结果保留在构建日志中，不在 ZIP 旁生成 JSON 报告。若下载得到外层归档，先解压外层，再完整解压里面的便携 ZIP。Actions 产物保留 30 天，过期后可手动重新构建。
 
-推送到 `main` 时，仅生成 Actions 构建产物，不创建或更新 Release；推送 `v*` 标签时，全部平台打包成功后自动创建同名正式 GitHub Release，并附上全部平台 ZIP 和 `.sha256` 文件。当前项目版本为 `0.2.2`，对应正式发布标签为 `v0.2.2`。正式发布前运行 `pnpm check`，通过后将版本标签推送到 GitHub。
+推送到 `main` 时，仅生成 Actions 构建产物，不创建或更新 Release；推送 `v*` 标签时，全部平台打包成功后自动创建同名正式 GitHub Release，并附上全部平台 ZIP 和 `.sha256` 文件。当前项目版本为 `0.2.3`，对应正式发布标签为 `v0.2.3`。正式发布前运行 `pnpm check`，通过后将版本标签推送到 GitHub。
 
-构建前核对根目录和管理台 `package.json`、Rust package 与 `Cargo.lock` 中的项目版本；版本标签必须精确等于 `v<项目版本>`，不一致时直接失败。可在本地运行 `python scripts/check_versions.py --ref refs/tags/v0.2.2` 验证。发布任务下载全部平台产物后重新校验 ZIP 的 SHA-256，通过后才上传 Release。
+构建前核对根目录和管理台 `package.json`、Rust package 与 `Cargo.lock` 中的项目版本；版本标签必须精确等于 `v<项目版本>`，不一致时直接失败。可在本地运行 `python scripts/check_versions.py --ref refs/tags/v0.2.3` 验证。发布任务下载全部平台产物后重新校验 ZIP 的 SHA-256，通过后才上传 Release。
 
 工作流安装 Node.js 24、项目指定的 pnpm、Python 3.12 和稳定 Rust，使用锁文件安装依赖并重新构建 release。Windows 使用静态 CRT；macOS 使用 arm64 架构并检查系统动态库依赖、执行权限和临时签名。macOS 包适用于 Apple Silicon，不生成 Intel 包；最低 macOS 版本记录在包内 `manifest.json`。Linux 使用 musl 静态链接，不依赖构建机的 glibc 版本；打包时检查 ELF 架构和静态依赖，包含前台启动器与 systemd 模板。
 

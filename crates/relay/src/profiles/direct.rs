@@ -197,7 +197,7 @@ impl Profiles {
                     if http {
                         // Native config is still read on every request. A changed effective
                         // config cannot reuse a thread or the process's startup configuration.
-                        let config = warm::digest(&config)?;
+                        let config = warm::inference_config_digest(&config)?;
                         if state.config.is_some_and(|old| old != config) {
                             return Err(Error::new("NATIVE_CONFIG_CHANGED", "原生配置已变化，重新准备实例。"));
                         }
@@ -308,7 +308,7 @@ impl Profiles {
             *backend.response_worker.lock().unwrap() = Some(warm::Worker::new([0; 32], directory));
             let result = async {
                 let mut provider = crate::provider::read(&backend.rpc, &cwd).await?;
-                if provider != job.provider {
+                if !provider.same_route(&job.provider) {
                     return Err(Error::new(
                         "ROUTE_CHANGED",
                         "原生提供方配置已变化，请重新启用路由。",

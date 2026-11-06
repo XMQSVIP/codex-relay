@@ -114,6 +114,12 @@ impl Profiles {
             if backend.response_worker.lock().unwrap().is_none() && backend.alive().await {
                 return Ok(());
             }
+            if backend.response_activity.try_write().is_err() {
+                return Err(Error::new(
+                    "BUSY",
+                    "实例仍有运行中的请求或待答工具回调，请完成后再启动或检查实例。",
+                ));
+            }
             backend.stop().await?;
             *worker = None;
         }

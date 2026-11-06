@@ -16,6 +16,16 @@ pub(crate) fn digest(value: &impl serde::Serialize) -> Result<[u8; 32]> {
     Ok(Sha256::digest(serde_json::to_vec(value)?).into())
 }
 
+pub(super) fn inference_config_digest(config: &serde_json::Value) -> Result<[u8; 32]> {
+    let mut effective = config.clone();
+    // All inference threads/tools choose a model explicitly. Changing the
+    // native default must not retire a host with a live client tool callback.
+    if let Some(config) = effective.as_object_mut() {
+        config.remove("model");
+    }
+    digest(&effective)
+}
+
 pub(crate) struct Worker {
     pub key: [u8; 32],
     pub config: Option<[u8; 32]>,
@@ -214,7 +224,24 @@ pub(super) fn reap_when_idle(slot: &Slot, backend: &Arc<Backend>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
+    #[test]
+    fn default_model_changes_keep_inference_hosts_but_other_defaults_do_not() {
+        use serde_json::json;
+        let mut config =
+            json!({"model":"first", "model_provider":"fixture", "model_reasoning_effort":"low"});
+        let initial = inference_config_digest(&config).unwrap();
+        config["model"] = json!("second");
+        assert_eq!(inference_config_digest(&config).unwrap(), initial);
+        config.as_object_mut().unwrap().remove("model");
+        assert_eq!(inference_config_digest(&config).unwrap(), initial);
+        config["model_reasoning_effort"] = json!("high");
+        assert_ne!(inference_config_digest(&config).unwrap(), initial);
+        config["model_reasoning_effort"] = json!("low");
+        config["model_provider"] = json!("other");
+        assert_ne!(inference_config_digest(&config).unwrap(), initial);
+    }
+
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn failed_or_cancelled_stop_retains_process_and_directory_for_retry() {
         use std::sync::atomic::Ordering;

@@ -71,12 +71,13 @@ def check(work, base, key, other_key, admin, wire, account):
     continued = post("/v1/responses", {**body, "input":[expected,{"role":"user","content":"continue"}]})
     assert continued["status"] == "completed"
     before = len(wire)
-    try:
-        post("/v1/responses/compact", {**body, "input":[expected]}, other_key)
-        raise AssertionError("Cross-key encrypted history must fail")
-    except urllib.error.HTTPError:
-        pass
-    assert len(wire)==before
+    # Full client-supplied history may be imported into another authorized Key's
+    # scope. It starts a new request; it does not claim the owner's live thread.
+    imported = post("/v1/responses/compact", {**body, "input":[expected]}, other_key)
+    assert imported["output"] == [expected]
+    assert len(wire)==before+1, "Imported history must be dispatched exactly once"
+    assert wire[-1]["body"]["input"][0] == expected
+    before = len(wire)
     ws = subprocess.run(["node",str(Path(__file__).with_name("test_native_cache_websocket.mjs")),base,key,"compact-direct"],
         capture_output=True,text=True,encoding="utf-8",timeout=120,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
     assert ws.returncode==0,ws.stdout+ws.stderr
@@ -95,12 +96,15 @@ def check(work, base, key, other_key, admin, wire, account):
     assert failed["output"]==[] and CANARY not in json.dumps(failed)
     # The installed official client invokes remote v2 through the relay, receives
     # the genuine item, installs it in RAM, then sends it in its next model request.
-    from probe_native_output_limit import INSTALL, Native
+    from probe_native_output_limit import Native
     from probe_native_context_management import finish_turn
+    # The relay refreshes its isolated installation when the desktop app updates.
+    # Use that same executable instead of the potentially stale workspace cache.
+    installation = json.loads((work / ".cache/launch-config.json").read_text(encoding="utf-8"))
     with tempfile.TemporaryDirectory(prefix="remote-client-",dir=work) as directory:
-        native = Native(Path(directory), int(base.rsplit(":",1)[1]))
+        native = Native(Path(directory), int(base.rsplit(":",1)[1]), installation=installation)
         try:
-            assert "result" in native.call("initialize",{"clientInfo":INSTALL["nativeClientInfo"],"capabilities":{"experimentalApi":True}})
+            assert "result" in native.call("initialize",{"clientInfo":installation["nativeClientInfo"],"capabilities":{"experimentalApi":True}})
             native.send({"method":"initialized"})
             start = native.call("thread/start",{"model":"gpt-6.1-sol","modelProvider":"synthetic",
                 "cwd":str(native.cwd),"ephemeral":True,"approvalPolicy":"untrusted","sandbox":"read-only",
@@ -124,7 +128,7 @@ def check(work, base, key, other_key, admin, wire, account):
     assert admin("/api/operations")["active"] == 0
     records = admin("/api/statistics")["records"]
     compact_records = [row for row in records if row.get("inputTokens") is not None and not row.get("nativeThreadId")]
-    assert len(compact_records)==7
+    assert len(compact_records)==8
     assert all(row["inputTokens"]==10 and row["outputTokens"]==2 and row.get("cachedInputTokens") is None for row in compact_records)
     # Scan service-owned data/logs while alive. The harness writes its synthetic
     # capture only after this check; production must never write either marker.

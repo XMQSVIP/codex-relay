@@ -69,6 +69,75 @@ fn non_default_models_keep_key_scope_and_provider_change_checks() {
     );
 }
 
+#[test]
+fn default_model_changes_do_not_revoke_explicit_model_requests() {
+    let temp = tempfile::tempdir().unwrap();
+    let ops = Operations::open(temp.path()).unwrap();
+    let account = Uuid::new_v4();
+    ops.register_accounts(&[(account, "native defaults".into())])
+        .unwrap();
+    let configured = provider();
+    ops.set_inference_route(account, revision(&ops), Some(configured.clone()))
+        .unwrap();
+    let key = ops
+        .create_api_key(ApiKeyCreate {
+            fast_mode: false,
+            name: "explicit model".into(),
+            group_id: DEFAULT_GROUP,
+            models: vec!["model-b".into()],
+            expires_in_days: None,
+            max_concurrency: 1,
+        })
+        .unwrap();
+    let access = ops.authenticate_api_key(&key.secret).unwrap();
+    let mut actual = configured.clone();
+    actual.model = "new-native-default".into();
+    let generation = codex_relay::operations::runtime::fingerprint(&configured);
+    assert_eq!(
+        generation,
+        codex_relay::operations::runtime::fingerprint(&actual)
+    );
+    ops.check_inference_route(account, &access, &actual, "model-b")
+        .unwrap();
+    assert!(
+        ops.check_inference_route(account, &access, &actual, "model-c")
+            .is_err(),
+        "ignoring the native default must not grant access to other models"
+    );
+
+    for (field, value) in [
+        ("execution", json!("api-key")),
+        ("id", json!("other-provider")),
+        ("baseUrl", json!("http://192.168.1.11/v1")),
+        ("auth", json!("other-identity")),
+        ("forwardHeaders", json!(["authorization"])),
+        ("requiredHeaders", json!(["authorization"])),
+        ("mcpServers", json!(["other-server"])),
+    ] {
+        let mut changed = serde_json::to_value(&actual).unwrap();
+        changed[field] = value;
+        let changed = serde_json::from_value(changed).unwrap();
+        assert_ne!(
+            generation,
+            codex_relay::operations::runtime::fingerprint(&changed),
+            "changing {field} must also invalidate routing fingerprints"
+        );
+        assert_eq!(
+            ops.check_inference_route(account, &access, &changed, "model-b")
+                .unwrap_err()
+                .code,
+            "ROUTE_CHANGED",
+            "changing {field} must still invalidate the route"
+        );
+    }
+
+    ops.set_inference_route(account, revision(&ops), Some(actual.clone()))
+        .unwrap();
+    ops.check_inference_route(account, &access, &configured, "model-b")
+        .unwrap();
+    assert_eq!(ops.configured_provider(account), Some(actual));
+}
+
 #[tokio::test]
 async fn internal_shared_route_preferences_do_not_survive_as_client_accounts() {
     use codex_relay::operations::DESKTOP_ACCOUNT;

@@ -68,6 +68,8 @@ node scripts/cargo-with-memory.mjs test --locked --lib profiles::
 pnpm test:web account-activation.spec.ts account-login.spec.ts
 ```
 
+安装了原生 app-server 时，可运行 `python scripts/test_account_concurrency.py --binary target/debug/codex-relay.exe --default-model-change-only`。它使用隔离的本机配置与本地模拟上游，验证默认模型变化后的预热、显式模型及推理强度、刷新路由默认模型后的加密历史续聊、待答工具线程在启动实例及账户、接入检查时立即返回 `BUSY` 且仍能续接，以及上游地址变化时在派发前拒绝请求；不使用真实凭据或发送真实模型请求。
+
 前端测试启动独立 Vite 服务，默认端口为 5174，通过模拟 `/api` 响应验证界面交互，不连接现有中转站。端口占用时会直接失败，可设置 `BRIDGE_TEST_WEB_PORT` 为其他有效端口；不会自动接管或复用已有服务。失败截图和 trace 保存在 `.cache/ui-tests/`。
 
 修改管理 API 时，同步更新前端类型与模拟响应，并运行对应 Rust 接口测试。账户、额度、请求记录和统计相关类型统一从 `web/contracts/admin.ts` 推导，`web/src/api.ts` 保留导出入口；契约验证器只用于测试，不进入管理台的运行时请求路径。
@@ -91,6 +93,16 @@ CI 与本地复用相同的检查命令。便携包仍由独立的 [自动打包
 开发检查和便携包工作流缓存 pnpm 下载仓库及 Rust 依赖构建产物。Rust 缓存按平台、工具链、锁文件、Cargo 配置和编译环境隔离，检查与 release 打包使用不同 key；Windows 静态 CRT 参数在缓存恢复前已设置。仅 main 保存缓存，PR 可读取缓存。默认不缓存项目自身的可执行文件和运行数据；首次运行或工具链/依赖变化仍需构建。缓存命中不会跳过测试。
 
 ## 验证边界
+
+HTTP 入口的编码检查同时覆盖 Responses、压缩、独立搜索及图片 JSON/multipart 路径：拒绝重复、多层和非 ASCII 的 `Content-Encoding`，图片入口继续按自身能力限制压缩正文。SSE 分帧同时覆盖直接上游观察和严格文本过滤，验证 LF、CR、CRLF、混合换行、首部 UTF-8 BOM、任意字节分片及未结束事件；严格过滤仍检查事件内容、大小限制和 EOF 后的完成交付。可按范围运行：
+
+```sh
+node scripts/cargo-with-memory.mjs test --locked --lib request_encoding
+node scripts/cargo-with-memory.mjs test --locked --lib sse::
+node scripts/cargo-with-memory.mjs test --locked --lib upstream::
+node scripts/cargo-with-memory.mjs test --locked --lib profiles::compaction::
+node scripts/cargo-with-memory.mjs test --locked --test guard --test api_key_upstreams --test client_api --test images --test responses_api --test responses_websocket --test account_test_chat
+```
 
 默认 Rust 检查不会运行标为 ignored 的原生安装、登录和容量测试。改动涉及原生协议、进程生命周期或容量时，按 [Windows 开发](WINDOWS-DEVELOPMENT.md)、[macOS 验证](MACOS-DEVELOPMENT.md#验证命令)、[Linux 原生初始化](LINUX-SERVER.md#源码构建和检查) 的环境要求补充相应测试，并在交付中列明实际执行结果。
 

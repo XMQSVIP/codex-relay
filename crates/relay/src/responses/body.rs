@@ -13,28 +13,14 @@ impl<S: Send + Sync> FromRequest<S> for JsonBody {
     type Rejection = Response;
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
         let fail = crate::client_api::client_error;
-        if request.headers().get_all("content-encoding").iter().count() > 1 {
-            return Err(fail(Error::new(
-                "UNSUPPORTED_MEDIA_TYPE",
-                "Content-Encoding 不接受多层或重复编码。",
-            )));
-        }
-        let encoding = request
-            .headers()
-            .get("content-encoding")
-            .map(|v| v.to_str().unwrap_or("invalid").to_owned())
-            .unwrap_or_default();
+        let encoding = crate::http_media::content_encoding(request.headers())
+            .map_err(fail)?
+            .to_owned();
         let json = request
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| {
-                v.split(';').next().is_some_and(|v| {
-                    let v = v.trim().to_ascii_lowercase();
-                    v == "application/json"
-                        || (v.starts_with("application/") && v.ends_with("+json"))
-                })
-            });
+            .is_some_and(crate::http_media::is_json);
         if !json {
             return Err(fail(Error::new(
                 "UNSUPPORTED_MEDIA_TYPE",

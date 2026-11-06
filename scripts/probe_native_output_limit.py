@@ -43,7 +43,7 @@ class Model(http.server.BaseHTTPRequestHandler):
 
 
 class Native:
-    def __init__(self, root, port, enabled_features=(), config_overrides=()):
+    def __init__(self, root, port, enabled_features=(), config_overrides=(), *, installation=None):
         self.home = root / 'home'
         self.cwd = root / 'workspace'
         self.home.mkdir()
@@ -68,7 +68,7 @@ experimental_bearer_token="SYNTHETIC_LIMIT_PROBE"
             ('CODEX_', 'OPENAI_', 'CHATGPT_', 'ANTHROPIC_', 'AZURE_OPENAI_'))}
         self.env['CODEX_HOME'] = str(self.home)
         self.env['NO_PROXY'] = '127.0.0.1,localhost,::1'
-        self.command = [INSTALL['appServerExecutable'], 'app-server', '--listen', 'stdio://']
+        self.command = [(installation or INSTALL)['appServerExecutable'], 'app-server', '--listen', 'stdio://']
         for feature in ['apps', 'plugins', 'hooks', 'shell_tool', 'unified_exec', 'multi_agent',
                         'browser_use', 'computer_use', 'image_generation', 'goals', 'memories',
                         'skill_search', 'workspace_dependencies', 'view_image', 'sleep_tool',

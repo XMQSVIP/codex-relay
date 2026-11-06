@@ -57,22 +57,23 @@ impl Raw {
             .await
             .map_err(|_| Error::new("PAYLOAD_TOO_LARGE", "请求正文超过 32 MiB。"))?;
         let mut headers = parts.headers;
+        let encoding = crate::http_media::content_encoding(&headers)?;
         let ct = headers
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_owned();
-        let (body, value) = if ct.split(';').next().is_some_and(|v| {
-            v.trim().eq_ignore_ascii_case("application/json") || v.trim().ends_with("+json")
-        }) {
-            let encoding = headers
-                .get(header::CONTENT_ENCODING)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
+        let (body, value) = if crate::http_media::is_json(&ct) {
             let value = crate::responses::decode_body(&body, encoding)?;
             headers.remove(header::CONTENT_ENCODING);
             (serde_json::to_vec(&value)?.into(), value)
         } else if path == "images/edits" {
+            if !encoding.trim().is_empty() && !encoding.trim().eq_ignore_ascii_case("identity") {
+                return Err(Error::new(
+                    "UNSUPPORTED_MEDIA_TYPE",
+                    "multipart 图片编辑暂不接受压缩请求体。",
+                ));
+            }
             let boundary = multer::parse_boundary(&ct)
                 .map_err(|_| super::invalid("图片编辑须为 JSON 或 multipart/form-data。"))?;
             let stream = futures_util::stream::once(std::future::ready(Ok::<
@@ -435,33 +436,16 @@ async fn retrieve(
 /// Incremental SSE observer. Forwarding does not depend on recognizing every event.
 #[derive(Default)]
 pub(crate) struct Events {
-    pending: Vec<u8>,
+    frames: crate::sse::Frames,
 }
 impl Events {
     pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<Vec<Value>> {
-        self.pending.extend_from_slice(bytes);
-        if self.pending.len() > 64 * 1024 * 1024 {
-            return Err(Error::new("UPSTREAM_INVALID_RESPONSE", "上游事件过大。"));
-        }
+        let frames = self
+            .frames
+            .push(bytes, 64 * 1024 * 1024)
+            .map_err(|_| Error::new("UPSTREAM_INVALID_RESPONSE", "上游事件过大。"))?;
         let mut out = vec![];
-        loop {
-            let boundary = self
-                .pending
-                .windows(2)
-                .position(|p| p == b"\n\n")
-                .map(|i| (i, 2))
-                .into_iter()
-                .chain(
-                    self.pending
-                        .windows(4)
-                        .position(|p| p == b"\r\n\r\n")
-                        .map(|i| (i, 4)),
-                )
-                .min_by_key(|(i, _)| *i);
-            let Some((i, n)) = boundary else {
-                break;
-            };
-            let chunk = self.pending.drain(..i + n).collect::<Vec<_>>();
+        for chunk in frames {
             if let Ok(text) = std::str::from_utf8(&chunk) {
                 let data = text
                     .lines()
@@ -539,6 +523,14 @@ pub(crate) async fn forward(
             previous.as_ref(),
             &access,
             &state.upstream_connections,
+            || {
+                if cancel.is_cancelled() {
+                    return Err(Error::new("REQUEST_CANCELLED", "请求已取消。"));
+                }
+                state
+                    .operations
+                    .check_inference_route(account, &access, &provider, &binding.model)
+            },
         )
         .await?;
         Ok::<_, Error>((transfer, binding))
@@ -558,11 +550,7 @@ pub(crate) async fn forward(
         .headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(';')
-                .next()
-                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
-        })
+        .is_some_and(|v| crate::http_media::is_type(v, "text/event-stream"))
     {
         "sse"
     } else {
@@ -640,6 +628,27 @@ struct Delivery {
     cancel: tokio_util::sync::CancellationToken,
     _registration: crate::profiles::InferenceRegistration,
 }
+
+pub(crate) fn json_response_event_type(response: &Value) -> Result<&'static str> {
+    if response["status"] == "failed" {
+        return Ok("response.failed");
+    }
+    if response["error"].is_object() {
+        return Ok("error");
+    }
+    match response["status"].as_str() {
+        Some("completed") => Ok("response.completed"),
+        Some("incomplete") => Ok("response.incomplete"),
+        Some("queued") => Ok("response.queued"),
+        Some("in_progress") => Ok("response.in_progress"),
+        Some("cancelled") => Err(Error::new("REQUEST_CANCELLED", "上游响应已取消。")),
+        _ => Err(Error::new(
+            "UPSTREAM_INVALID_RESPONSE",
+            "上游未返回有效的 Responses 对象。",
+        )),
+    }
+}
+
 impl Delivery {
     async fn run(mut self, tx: mpsc::Sender<Result<Bytes>>) {
         let status = self.transfer.status;
@@ -648,7 +657,7 @@ impl Delivery {
             .headers
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("text/event-stream"));
+            .is_some_and(|v| crate::http_media::is_type(v, "text/event-stream"));
         let aggregate = self.binding.websocket && self.raw.value["stream"] != true;
         let mut parser = Events::default();
         let mut document = Vec::new();
@@ -675,13 +684,13 @@ impl Delivery {
                     for value in parser.push(&chunk)? {
                         let kind=value["type"].as_str().unwrap_or("");
                         if first.is_none() && kind.ends_with(".delta") {first=Some(crate::now_ms());}
-                        if value["response"].is_object() {self.remember(&value["response"],matches!(kind,"response.completed"|"response.incomplete")).await?;}
                         if matches!(kind,"response.completed"|"response.incomplete"|"response.failed"|"error"|"image_generation.completed"|"image_edit.completed") {
                             terminal=true;
                             last=if value["response"].is_object(){value["response"].clone()}else{value.clone()};
                         }
                         if matches!(kind,"response.failed"|"error") {event_error=Some(Error::new("UPSTREAM_REQUEST_FAILED","上游返回失败事件。"));}
                         if kind=="response.incomplete" {event_error=Some(Error::new("UPSTREAM_INCOMPLETE","上游响应未完成。"));}
+                        if value["response"].is_object() {self.remember(&value["response"],matches!(kind,"response.completed"|"response.incomplete")).await?;}
                     }
                 } else {
                     if document.len()+chunk.len()>64*1024*1024 {return Err(Error::new("PAYLOAD_TOO_LARGE","上游响应超过 64 MiB。"));}
@@ -690,7 +699,22 @@ impl Delivery {
                 if !aggregate {send(&tx,Ok(chunk)).await?;}
             }
             if !sse {
-                last=serde_json::from_slice(&document).unwrap_or(Value::Null);
+                last=match serde_json::from_slice(&document) {
+                    Ok(value)=>value,
+                    Err(_) if status.is_success() && self.raw.method!=Method::DELETE=>{
+                        // HTTP has already forwarded the original body. Record the
+                        // protocol failure without replacing it or replaying work.
+                        complete=true;
+                        return Err(Error::new("UPSTREAM_INVALID_RESPONSE","上游未返回有效 JSON。"));
+                    },
+                    Err(_)=>Value::Null,
+                };
+                if status.is_success() && self.raw.method==Method::POST && self.raw.path=="responses" {
+                    if let Err(error)=json_response_event_type(&last) {
+                        complete=true;
+                        return Err(error);
+                    }
+                }
                 if status.is_success() && self.raw.method==Method::POST {
                     let accepted=matches!(last["status"].as_str(),Some("completed"|"incomplete")) || (last["object"]=="response.compaction" && last["error"].is_null());
                     self.remember(&last,accepted).await?;
@@ -705,7 +729,7 @@ impl Delivery {
             complete=!status.is_success() || !sse || terminal;
             if !status.is_success(){return Err(transport::status_error(status));}
             if sse && !terminal{return Err(Error::new("UPSTREAM_INVALID_RESPONSE","上游流未返回终态。"));}
-            if let Some(error)=event_error.take(){return Err(error);}
+            if let Some(error)=&event_error{return Err(error.clone());}
             Ok(())
         }.await;
         if let Err(error) = &result {
@@ -714,21 +738,32 @@ impl Delivery {
             }
         }
         let mut summary = super::summary(&last, first);
-        if let Err(error) = result {
+        // A later delivery failure cannot overwrite an observed model terminal.
+        let model_error = if terminal && status.is_success() {
+            event_error.as_ref()
+        } else {
+            result.as_ref().err()
+        };
+        let response_error = if terminal && status.is_success() && model_error.is_none() {
+            result.as_ref().err()
+        } else {
+            None
+        };
+        if let Some(error) = model_error {
             summary.outcome = if crate::execution::cancelled(&error.code) {
                 "cancelled"
             } else {
                 "failed"
             }
             .into();
-            summary.error_code = Some(error.code);
-            summary.error_message = Some(error.message);
+            summary.error_code = Some(error.code.clone());
+            summary.error_message = Some(error.message.clone());
         }
         let outcome = ExecutionOutcome {
             model: Ok(summary),
             cleanup_error: None,
         };
-        let _ = self.lease.finish_execution(&outcome, None);
+        let _ = self.lease.finish_execution(&outcome, response_error);
         let _ = self
             .state
             .operations
@@ -775,4 +810,38 @@ async fn send(tx: &mpsc::Sender<Result<Bytes>>, value: Result<Bytes>) -> Result<
         .await
         .map_err(|_| Error::new("STREAM_BACKPRESSURE", "客户端读取超时。"))?
         .map_err(|_| Error::new("STREAM_CONSUMER_CLOSED", "客户端已断开。"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_observer_handles_bom_cr_and_split_crlf_without_dispatching_partial_frames() {
+        let events = [
+            json!({"type":"response.output_text.delta","delta":"中文🌍"}),
+            json!({"type":"response.completed","response":{"id":"r","status":"completed"}}),
+        ];
+        for newline in ["\n", "\r", "\r\n"] {
+            let wire = format!(
+                "\u{feff}{}",
+                events
+                    .iter()
+                    .map(|event| format!("data: {event}{newline}{newline}"))
+                    .collect::<String>()
+            );
+            for cut in 0..=wire.len() {
+                let mut parser = Events::default();
+                let mut actual = parser.push(&wire.as_bytes()[..cut]).unwrap();
+                actual.extend(parser.push(&wire.as_bytes()[cut..]).unwrap());
+                assert_eq!(actual, events, "newline={newline:?}, cut={cut}");
+            }
+        }
+        assert!(
+            Events::default()
+                .push(b"data: {\"type\":\"response.completed\"}\n")
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

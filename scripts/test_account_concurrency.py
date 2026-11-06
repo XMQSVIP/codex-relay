@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--compaction-position", choices=("before", "after"), default="before")
     parser.add_argument("--turn-settings-only", action="store_true", help="check native schema, summary, appended instructions and live tool-turn overrides")
     parser.add_argument("--mixed-models-only", action="store_true", help="check concurrent models share one host while histories and cancellation stay independent")
+    parser.add_argument("--default-model-change-only", action="store_true", help="check native default model changes preserve explicit requests and route checks")
     parser.add_argument("--group-continuation-only", action="store_true", help="check authorized group moves preserve HTTP and WebSocket native continuations")
     parser.add_argument("--desktop-first-reasoning", action="store_true", help="include a reasoning item only in the first desktop reply")
     from native_cache_audit_cases import CASES, response_items
@@ -109,7 +110,7 @@ def main():
             assert gate.wait(90), "synthetic response was never released"
             item = {"type": "message", "id": "msg_" + uuid.uuid4().hex, "role": "assistant", "status": "completed",
                     "content": [{"type": "output_text", "text": marker + "-answer", "annotations": []}]}
-            if args.turn_settings_only:
+            if args.turn_settings_only or args.default_model_change_only:
                 item["content"][0]["text"] = json.dumps({"value": marker + "-answer"})
             if marker == "concurrency-desktop":
                 item["phase"] = "final_answer"
@@ -129,7 +130,7 @@ def main():
                     value["internal_chat_message_metadata_passthrough"] = {"turn_id": str(uuid.uuid4())}
             if marker == "concurrency-desktop" and args.desktop_case != "text":
                 items = response_items(args.desktop_case, calls.count(marker), item, body)
-            if args.desktop_first_reasoning and marker == "concurrency-desktop" and calls.count(marker) == 1:
+            if (args.desktop_first_reasoning or args.default_model_change_only) and marker == "concurrency-desktop" and calls.count(marker) == 1:
                 items.insert(0, {"type": "reasoning", "id": "rs_" + uuid.uuid4().hex,
                     "summary": [], "encrypted_content": "synthetic-reasoning-state"})
             events = [{"type": "response.output_item.done", "output_index": index, "item": value}
@@ -174,12 +175,12 @@ def main():
     process = subprocess.Popen([str(executable), "serve", "--port", str(port), "--web-dir", "web"], cwd=work,
                                env=env, stdout=log, stderr=log, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
-    def request(path, body=None, key=None, streaming=False):
+    def request(path, body=None, key=None, streaming=False, timeout=90):
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = "Bearer " + key
         req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(), headers=headers)
-        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=90)
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
         if streaming:
             return response
         with response:
@@ -227,6 +228,107 @@ def main():
                 "groupIds": [GROUP], "maxConcurrency": 2})
         a = request("/api/api-keys", {"name": "user-a", "groupId": GROUP})["secret"]
         b = request("/api/api-keys", {"name": "user-b", "groupId": GROUP})["secret"]
+        if args.default_model_change_only:
+            def standby_events():
+                return [json.loads(line) for line in (work / "gateway.log").read_text(encoding="utf-8").splitlines()
+                        if '"event":"native_standby_ready"' in line]
+
+            wait(lambda: bool(standby_events()) and request("/api/operations")["active"] == 0)
+            initial_standbys = len(standby_events())
+
+            def change_native_config(old, new):
+                ops = request("/api/operations")
+                request(f"/api/accounts/{account_id}/activation", {"revision": ops["revision"], "enabled": False})
+                config = home / "config.toml"
+                contents = config.read_text(encoding="utf-8")
+                assert old in contents
+                config.write_text(contents.replace(old, new), encoding="utf-8")
+                ops = request("/api/operations")
+                request(f"/api/accounts/{account_id}/activation", {"revision": ops["revision"], "enabled": True})
+
+            change_native_config('model="gpt-6.1-sol"', 'model="gpt-6-luna"')
+            # Activation retains the saved route. Prewarming must accept the
+            # changed default without submitting a model request of its own.
+            wait(lambda: len(standby_events()) > initial_standbys and request("/api/operations")["active"] == 0)
+            assert not calls, "prewarming must not submit a model turn"
+            unblock("concurrency-desktop")
+            response = request("/v1/responses", {
+                "model": "gpt-6.1-sol", "input": "concurrency-desktop", "store": False,
+                "max_output_tokens": 4096, "reasoning": {"effort": "high"},
+                "text": {"format": {"type": "json_object"}},
+            }, a)
+            assert response["status"] == "completed", response
+            assert len(tool_wire) == 1, "the request must not be replayed"
+            assert tool_wire[0]["body"]["model"] == "gpt-6.1-sol", "the explicit model must override the new default"
+            assert tool_wire[0]["body"]["reasoning"]["effort"] == "high"
+            ops = request("/api/operations")
+            policy = next(account for account in ops["accounts"] if account["id"] == account_id)
+            assert policy["route"]["model"] == "gpt-6.1-sol", "the saved route must not be rewritten per request"
+
+            # Refresh the saved default as well. Protected history must keep
+            # its account binding even when route metadata is refreshed.
+            request(f"/api/accounts/{account_id}/route", {"revision": ops["revision"], "enabled": True})
+            history = [{"role": "user", "content": "concurrency-desktop"}, *response["output"],
+                       {"role": "user", "content": "concurrency-desktop"}]
+            continued = request("/v1/responses", {
+                "model": "gpt-6.1-sol", "input": history, "store": False,
+                "reasoning": {"effort": "high"}, "text": {"format": {"type": "json_object"}},
+            }, a)
+            assert continued["status"] == "completed", continued
+            assert len(tool_wire) == 2, "route metadata refresh must not replay a model turn"
+            assert tool_wire[-1]["body"]["model"] == "gpt-6.1-sol"
+            assert tool_wire[-1]["body"]["reasoning"]["effort"] == "high"
+
+            tool_payload = {
+                "model": "gpt-6.1-sol", "input": "concurrency-tool-C", "reasoning": {"effort": "high"},
+                "tools": [{"type": "function", "name": "client_echo", "parameters": {"type": "object"}}],
+            }
+            unblock("concurrency-tool-C")
+            pending = request("/v1/responses", tool_payload, a)
+            call = next(item for item in pending["output"] if item["type"] == "function_call")
+            config = home / "config.toml"
+            contents = config.read_text(encoding="utf-8")
+            assert 'model="gpt-6-luna"' in contents
+            config.write_text(contents.replace('model="gpt-6-luna"', 'model="gpt-6-astra"'), encoding="utf-8")
+            ops = request("/api/operations")
+            if report["native_cache_reuse"]:
+                for action, payload in [("route", {"revision": ops["revision"], "enabled": True}), ("start", {}), ("check", {})]:
+                    try:
+                        request(f"/api/accounts/{account_id}/{action}", payload, timeout=5)
+                    except urllib.error.HTTPError as error:
+                        rejected = json.load(error)
+                        assert error.code == 409 and rejected["error"]["code"] == "BUSY", (action, rejected)
+                    else:
+                        raise AssertionError(f"{action} must refuse the live tool host instead of waiting for it to stop")
+            tool_payload["input"] = [{"role": "user", "content": "concurrency-tool-C"}, *pending["output"],
+                                     {"type": "function_call_output", "call_id": call["call_id"],
+                                      "output": "DEFAULT_MODEL_CHANGE_RESULT"}]
+            resumed = request("/v1/responses", tool_payload, a)
+            assert resumed["status"] == "completed", resumed
+            assert len(tool_wire) == 4, "default model changes must not replay a tool turn"
+            if report["native_cache_reuse"]:
+                assert tool_wire[-1]["session"] == tool_wire[-2]["session"], "the live tool thread must survive"
+            assert tool_wire[-1]["body"]["model"] == "gpt-6.1-sol"
+
+            change_native_config(f'base_url="http://127.0.0.1:{model_port}/v1"',
+                                 f'base_url="http://127.0.0.1:{model_port}/changed/v1"')
+            try:
+                infer("concurrency-desktop", a)
+            except urllib.error.HTTPError as error:
+                rejected = json.load(error)
+                assert rejected["error"]["code"] == "ROUTE_CHANGED", rejected
+            else:
+                raise AssertionError("a changed upstream route must still be rejected")
+            assert len(calls) == 4, "route rejection must happen before any model turn"
+            report["default_model_change"] = "passed"
+            report["refreshed_default_preserves_protected_history"] = "passed"
+            report["changed_default_preserves_live_tool_callback"] = "passed" if report["native_cache_reuse"] else "not applicable"
+            report["inspection_does_not_stop_live_tool_host"] = "passed" if report["native_cache_reuse"] else "not applicable"
+            report["explicit_model_and_reasoning"] = "passed"
+            report["changed_upstream_rejected_before_dispatch"] = "passed"
+            report["synthetic_upstream_requests"] = len(calls)
+            print(json.dumps(report, ensure_ascii=False))
+            return
         if args.group_continuation_only:
             for marker in ["concurrency-desktop", "concurrency-tool-C", "concurrency-tool-D"]:
                 unblock(marker)

@@ -593,7 +593,7 @@ impl Operations {
             a.id == account
                 && !a.deleting
                 && a.belongs_to(access.group_id)
-                && a.route.as_ref() == Some(provider)
+                && a.route.as_ref().is_some_and(|p| p.same_route(provider))
         }) {
             return;
         }

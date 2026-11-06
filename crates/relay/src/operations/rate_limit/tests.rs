@@ -117,6 +117,24 @@ fn limited(lease: Lease) {
 }
 
 #[tokio::test]
+async fn default_model_changes_do_not_bypass_an_account_cooldown() {
+    let f = Fixture::new(Execution::Native, "native-chatgpt:fixture");
+    limited(f.acquire(f.a).await);
+    let mut provider = f.ops.configured_provider(f.a).unwrap();
+    provider.model = "new-native-default".into();
+    f.ops
+        .set_inference_route(f.a, revision(&f.ops), Some(provider.clone()))
+        .unwrap();
+    assert_eq!(f.health()["state"], "cooling");
+    assert_eq!(f.health()["rateLimitFailures"], 1);
+    provider.auth = "native-chatgpt:new-identity".into();
+    f.ops
+        .set_inference_route(f.a, revision(&f.ops), Some(provider))
+        .unwrap();
+    assert_eq!(f.health()["state"], "available");
+}
+
+#[tokio::test]
 async fn rate_limit_cools_only_the_login_account_and_routes_new_work_to_its_sibling() {
     let f = Fixture::new(Execution::Native, "native-chatgpt:fixture");
     limited(f.acquire(f.a).await);

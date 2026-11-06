@@ -141,7 +141,7 @@ impl Profiles {
             )
             .await;
         let config = match prepared {
-            Ok((actual, _, config)) if actual == provider => config,
+            Ok((actual, _, config)) if actual.same_route(&provider) => config,
             result => {
                 // Keep ownership on cleanup failure so the normal stop path can retry.
                 if backend.stop().await.is_err() {
@@ -158,7 +158,7 @@ impl Profiles {
             .unwrap()
             .as_mut()
             .unwrap()
-            .config = Some(warm::digest(&config)?);
+            .config = Some(warm::inference_config_digest(&config)?);
         self.track_client(id, &backend);
         self.pin_response(id, &backend);
         *worker = Some(backend.clone());

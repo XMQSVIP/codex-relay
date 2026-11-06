@@ -481,11 +481,17 @@ impl Backend {
         Ok(())
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, any(unix, windows)))]
     pub(crate) fn test_backend() -> Self {
-        let mut command = Command::new("sh");
+        #[cfg(unix)]
+        let (executable, arguments) = ("sh", ["-c", "read value"]);
+        #[cfg(windows)]
+        let (executable, arguments) = ("cmd.exe", ["/C", "set /p fixture="]);
+        let mut command = Command::new(executable);
+        #[cfg(windows)]
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
         command
-            .args(["-c", "read value"])
+            .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -506,7 +512,7 @@ impl Backend {
                 title: "Relay test".into(),
                 version: "0".into(),
             },
-            executable: "sh".into(),
+            executable: executable.into(),
             child: Mutex::new(child),
             tree,
             cached_catalog: false,

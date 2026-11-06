@@ -52,8 +52,8 @@ impl Profiles {
         *worker = Some(backend.clone());
         let result = {
             let work = async {
-                let (provider, credential) = self
-                    .read_route(
+                let (provider, credential, config) = self
+                    .read_route_with_config(
                         job.account,
                         &backend,
                         &cwd,
@@ -65,11 +65,7 @@ impl Profiles {
                     )
                     .await?;
                 ops.check_inference_route(job.account, &job.access, &provider, &job.model)?;
-                let config = backend
-                    .rpc
-                    .request("config/read", json!({"cwd":cwd,"includeLayers":false}))
-                    .await?;
-                let selected = &config["config"]["model_providers"][&provider.id];
+                let selected = &config["model_providers"][&provider.id];
                 let openai_auth =
                     provider.id == "openai" || selected["requires_openai_auth"] == true;
                 let status = if credential.is_none() && openai_auth {
@@ -84,7 +80,7 @@ impl Profiles {
                     Value::Null
                 };
                 let (url, headers) = transport(
-                    &config["config"],
+                    &config,
                     &provider,
                     &status,
                     credential.as_ref(),

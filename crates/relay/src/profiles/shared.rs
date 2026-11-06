@@ -247,7 +247,7 @@ impl Profiles {
                                 "key": job.access.key_id,
                                 "model": job.model,
                                 "account": job.account,
-                                "route": job.provider,
+                                "route": job.provider.route_identity(),
                             }))
                         }).transpose()?
                     } else {
@@ -345,7 +345,7 @@ impl Profiles {
                 }
                 if continuation.incoming.is_some() {
                     ops.check_inference_route(job.account, &job.access, &job.provider, &job.model)?;
-                    let route = warm::digest(&job.provider)?;
+                    let route = warm::digest(&job.provider.route_identity())?;
                     if !backend
                         .response_worker
                         .lock()
@@ -556,8 +556,8 @@ impl Profiles {
         ops.check_inference_route(job.account, &job.access, &provider, &job.model)?;
         provider.model.clone_from(&job.model);
         let default_summary = responses::reuse::default_summary(&config);
-        let config = warm::digest(&config)?;
-        let route = warm::digest(&job.provider)?;
+        let config = warm::inference_config_digest(&config)?;
+        let route = warm::digest(&job.provider.route_identity())?;
         let mut state = backend.response_worker.lock().unwrap();
         let state = state.as_mut().unwrap();
         if state.retired {

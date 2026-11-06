@@ -59,7 +59,7 @@ pub(super) fn finished(
             .settings
             .accounts
             .iter()
-            .any(|a| a.id == account && a.route.as_ref() == Some(provider))
+            .any(|a| a.id == account && a.route.as_ref().is_some_and(|p| p.same_route(provider)))
     {
         return;
     }

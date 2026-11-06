@@ -73,7 +73,7 @@ fn save_scoped(
         let existing:Option<String>=tx.query_row("SELECT binding FROM response_affinities WHERE owner=?1 AND group_id=?2 AND fingerprint=?3",params![access.key_id.to_string(),access.group_id.to_string(),format!("{scope}:{id}")],|r|r.get(0)).optional().map_err(storage)?;
         if let Some(existing)=existing {
             let old:Binding=serde_json::from_str(&existing)?;
-            if old.account!=binding.account || old.model!=binding.model || old.provider!=binding.provider || (scope=="search" && old.native_tools!=binding.native_tools) {
+            if old.account!=binding.account || old.model!=binding.model || !old.provider.same_route(&binding.provider) || (scope=="search" && old.native_tools!=binding.native_tools) {
                 return Err(Error::new("RESPONSE_CHAIN_MISMATCH","上游返回了已属于其他账户或配置的响应标识。"));
             }
         }
@@ -147,4 +147,71 @@ pub(super) fn delete(ops: &Operations, access: &ClientAccess, id: &str) -> Resul
         .map_err(storage)?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn default_model_changes_preserve_response_and_search_binding_ownership() {
+        let root = tempfile::tempdir().unwrap();
+        let ops = Operations::open(root.path()).unwrap();
+        let key = ops
+            .create_api_key(
+                serde_json::from_value(json!({
+                    "name":"binding owner", "groupId":crate::operations::DEFAULT_GROUP
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let access = ops.authenticate_api_key(&key.secret).unwrap();
+        let provider: Provider = serde_json::from_value(json!({
+            "id":"fixture", "model":"native-default", "baseUrl":"http://127.0.0.1:9/v1",
+            "auth":"none", "forwardHeaders":[], "requiredHeaders":[], "mcpServers":[]
+        }))
+        .unwrap();
+        for scope in ["upstream", "search"] {
+            let mut binding = Binding {
+                account: Uuid::new_v4(),
+                model: "requested-model".into(),
+                provider: provider.clone(),
+                websocket: false,
+                native_tools: false,
+            };
+            save_scoped(&ops, &access, "same-response", &binding, scope).unwrap();
+            binding.provider.model = "new-native-default".into();
+            save_scoped(&ops, &access, "same-response", &binding, scope).unwrap();
+            for changed in [
+                Binding {
+                    model: "other-model".into(),
+                    ..binding.clone()
+                },
+                Binding {
+                    provider: Provider {
+                        auth: "other-identity".into(),
+                        ..binding.provider.clone()
+                    },
+                    ..binding.clone()
+                },
+            ] {
+                assert_eq!(
+                    save_scoped(&ops, &access, "same-response", &changed, scope)
+                        .unwrap_err()
+                        .code,
+                    "RESPONSE_CHAIN_MISMATCH"
+                );
+            }
+            if scope == "search" {
+                binding.native_tools = true;
+                assert_eq!(
+                    save_scoped(&ops, &access, "same-response", &binding, scope)
+                        .unwrap_err()
+                        .code,
+                    "RESPONSE_CHAIN_MISMATCH"
+                );
+            }
+        }
+    }
 }

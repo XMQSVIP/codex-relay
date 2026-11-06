@@ -12,6 +12,8 @@ pub use execute::run;
 pub(crate) use execute::run_profiled;
 mod request;
 pub(crate) mod reuse;
+#[cfg(test)]
+mod routing_tests;
 mod search;
 mod service_tier;
 mod storage;

@@ -330,7 +330,7 @@ async fn execute_inner(
                 .headers()
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.starts_with("text/event-stream"));
+                .is_some_and(|v| crate::http_media::is_type(v, "text/event-stream"));
             let mut stream = response.into_body().into_data_stream();
             let mut parser = crate::upstream::dispatch::Events::default();
             let mut document = Vec::new();
@@ -354,11 +354,19 @@ async fn execute_inner(
                 }
             }
             if !sse {
-                let value: Value = serde_json::from_slice(&document)
-                    .unwrap_or_else(|_| json!({"message":"上游未返回 JSON。"}));
                 let event = if status.is_success() {
-                    json!({"type":"response.completed","response":value})
+                    let value: Value = serde_json::from_slice(&document).map_err(|_| {
+                        Error::new("UPSTREAM_INVALID_RESPONSE", "上游未返回有效 JSON。")
+                    })?;
+                    let kind = crate::upstream::dispatch::json_response_event_type(&value)?;
+                    if kind == "error" {
+                        json!({"type":"error","error":value["error"]})
+                    } else {
+                        json!({"type":kind,"response":value})
+                    }
                 } else {
+                    let value: Value = serde_json::from_slice(&document)
+                        .unwrap_or_else(|_| json!({"message":"上游未返回 JSON。"}));
                     json!({"type":"error","status":status.as_u16(),"error":value.get("error").unwrap_or(&value)})
                 };
                 emit(&tx, &lane, event).await?;

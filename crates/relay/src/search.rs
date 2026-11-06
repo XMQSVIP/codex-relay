@@ -45,12 +45,7 @@ impl SearchRequest {
                 "搜索请求须使用 application/json。",
             ));
         }
-        let encoding = request
-            .headers()
-            .get(header::CONTENT_ENCODING)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_owned();
+        let encoding = crate::http_media::content_encoding(request.headers())?.to_owned();
         let body = to_bytes(request.into_body(), crate::media::BODY_LIMIT)
             .await
             .map_err(|_| Error::new("PAYLOAD_TOO_LARGE", "搜索请求超过 32 MiB 或读取失败。"))?;
@@ -303,6 +298,30 @@ fn reject(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn request_encoding_rejects_duplicate_and_non_ascii_headers() {
+        for encodings in [
+            vec![b"identity".as_slice(), b"gzip"],
+            vec![b"\xff".as_slice()],
+        ] {
+            let mut request = Request::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    json!({"id":"s","model":"m","commands":{}}).to_string(),
+                ))
+                .unwrap();
+            for encoding in encodings {
+                request.headers_mut().append(
+                    header::CONTENT_ENCODING,
+                    axum::http::HeaderValue::from_bytes(encoding).unwrap(),
+                );
+            }
+            assert!(
+                matches!(SearchRequest::parse(request).await, Err(error) if error.code == "UNSUPPORTED_MEDIA_TYPE")
+            );
+        }
+    }
 
     #[test]
     fn failed_search_settlement_preserves_usage_status_and_cleanup_without_guessing() {

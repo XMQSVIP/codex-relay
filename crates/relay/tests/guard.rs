@@ -68,6 +68,42 @@ fn streaming_preserves_utf8_at_every_byte_and_holds_terminal_until_eof() {
 }
 
 #[test]
+fn sse_line_endings_and_leading_bom_work_at_every_chunk_boundary() {
+    for line in ["\n", "\r", "\r\n"] {
+        for blank in ["\n", "\r", "\r\n"] {
+            let data = format!(
+                "\u{feff}{}",
+                events()
+                    .iter()
+                    .map(|event| {
+                        format!(
+                            "event: {}{line}data: {event}{line}: comment{blank}{blank}",
+                            event["type"].as_str().unwrap()
+                        )
+                    })
+                    .collect::<String>()
+            );
+            for cut in 0..=data.len() {
+                let mut filter = TextSse::default();
+                let mut forwarded = filter.push(&data.as_bytes()[..cut]).unwrap();
+                forwarded.extend(filter.push(&data.as_bytes()[cut..]).unwrap());
+                assert_eq!(
+                    forwarded.len(),
+                    3,
+                    "line={line:?}, blank={blank:?}, cut={cut}"
+                );
+                assert!(
+                    !forwarded
+                        .iter()
+                        .any(|frame| frame.contains("response.completed"))
+                );
+                assert!(filter.finish().unwrap()[0].contains("response.completed"));
+            }
+        }
+    }
+}
+
+#[test]
 fn rejects_tools_in_all_output_locations_and_stays_closed() {
     for kind in [
         "function_call",

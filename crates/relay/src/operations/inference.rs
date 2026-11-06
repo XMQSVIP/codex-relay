@@ -62,15 +62,15 @@ impl Operations {
         }
         policy.route = None;
         let revision = next.revision;
-        Self::save(&mut inner, next, revision)?;
-        inner.runtime.quotas.remove(&account);
-        inner
-            .db
-            .execute(
+        Self::save_with_cleanup(&mut inner, next, revision, |db| {
+            db.execute(
                 "DELETE FROM account_quotas WHERE account_id=?1",
                 [account.to_string()],
             )
-            .map_err(super::storage)?;
+            .map_err(storage)?;
+            Ok(())
+        })?;
+        inner.runtime.quotas.remove(&account);
         Ok(())
     }
     /// Desktop debugging is not a client API account. Keep historical request
@@ -248,12 +248,12 @@ impl Operations {
                 a.id == account
                     && a.belongs_to(access.group_id)
                     && a.enabled
-                    && a.route.as_ref() == Some(provider)
+                    && a.route.as_ref().is_some_and(|p| p.same_route(provider))
             })
         {
             return Err(Error::new(
                 "ROUTE_CHANGED",
-                "等待期间模型授权或账户路由已改变，未派发请求。",
+                "模型授权或账户路由已变化，请检查账户接入配置。",
             ));
         }
         Ok(())
@@ -320,11 +320,11 @@ impl Operations {
     }
 }
 impl Lease {
-    /// Keep the exclusive import reservation while invalidating the old route.
-    pub(crate) fn invalidate_import_credentials(&self) -> Result<()> {
+    /// Keep the exclusive maintenance reservation while invalidating the old route.
+    pub(crate) fn invalidate_credentials(&self) -> Result<()> {
         let account = self
             .account_id
-            .ok_or_else(|| Error::new("INVALID_INPUT", "缺少导入账户。"))?;
+            .ok_or_else(|| Error::new("INVALID_INPUT", "缺少凭据账户。"))?;
         {
             let inner = self.owner.inner.lock().unwrap();
             if !inner
@@ -332,7 +332,7 @@ impl Lease {
                 .get(&self.id)
                 .is_some_and(|a| a.exclusive && a.limited)
             {
-                return Err(Error::new("BUSY", "凭据导入需要独占账户。"));
+                return Err(Error::new("BUSY", "凭据修改需要独占账户。"));
             }
         }
         self.owner
@@ -458,6 +458,12 @@ mod retained_route_tests {
         .unwrap();
         assert!(
             ops.check_retained_inference_route(account, old.key_id, &provider, "m")
+                .is_ok()
+        );
+        let mut changed_default = provider.clone();
+        changed_default.model = "other-native-default".into();
+        assert!(
+            ops.check_retained_inference_route(account, old.key_id, &changed_default, "m")
                 .is_ok()
         );
         assert_eq!(

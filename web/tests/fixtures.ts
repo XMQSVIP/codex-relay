@@ -19,7 +19,7 @@ export function overview(count = 3): Overview {
   }));
   const policies: AccountPolicy[] = accounts.map(a => ({ id: a.id, name: a.name, groupIds: [groupId], enabled: true, maxConcurrency: 5, active: 0, queued: 0, route: { id: 'openai', model: 'test-model', baseUrl: 'https://model.example.test', auth: 'chatgpt' } }));
   return {
-    implementation: 'rust', version: '0.2.2', inferenceEnabled: !!count, busy: false,
+    implementation: 'rust', version: '0.2.3', inferenceEnabled: !!count, busy: false,
     managedCodex: { supported: false, architecture: null, activeVersion: null, latestVersion: null, downloadUrl: null, checkedAt: null, lastAttemptAt: null, versions: [], operation: null, error: null },
     automaticProxy: { state: 'direct', http: null, https: null },
     installation: { manuallyConfigured: false, desktopExecutable: 'C:\\Program Files\\Codex\\Codex.exe', archive: 'C:\\Program Files\\Codex\\resources\\app.asar', appServerVersion: 'fixture-version', appServerExecutable: 'C:\\Program Files\\Codex\\resources\\codex.exe', appServerSha256: 'fixture' },

@@ -28,6 +28,7 @@ CREATE TABLE api_keys (
 CREATE INDEX api_keys_group ON api_keys(group_id);
 CREATE TABLE native_capabilities(account_id TEXT PRIMARY KEY, document TEXT NOT NULL);
 CREATE TABLE account_quotas(account_id TEXT PRIMARY KEY, document TEXT NOT NULL);
+CREATE TABLE account_subscriptions(account_id TEXT PRIMARY KEY, document TEXT NOT NULL);
 CREATE TABLE response_affinities (
     owner TEXT NOT NULL, group_id TEXT NOT NULL, model TEXT NOT NULL, fingerprint TEXT NOT NULL,
     account TEXT NOT NULL, binding TEXT NOT NULL, expires INTEGER NOT NULL,

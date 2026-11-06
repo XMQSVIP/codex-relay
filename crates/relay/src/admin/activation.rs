@@ -231,7 +231,7 @@ async fn stop_disabled(state: &AdminState, id: Uuid) -> Result<()> {
 impl AdminState {
     // Disabled accounts still support explicit login, inspection and worker debugging.
     // Paused-account maintenance still reserves capacity atomically on admission.
-    pub(super) async fn account_lease(&self, id: Uuid, kind: &str, action: &str) -> Result<Lease> {
+    fn account_maintenance_required(&self, id: Uuid) -> Result<bool> {
         self.profiles.require_no_login(id)?;
         if self.operations.proxy_blocked(id) {
             return Err(crate::error::Error::new(
@@ -239,8 +239,24 @@ impl AdminState {
                 "账户代理正在切换，请稍后重试。",
             ));
         }
-        if !self.operations.account_scheduling_enabled(id)? {
+        let maintenance = !self.operations.account_scheduling_enabled(id)?;
+        if maintenance {
             self.operations.require_account_idle(id)?;
+        }
+        Ok(maintenance)
+    }
+
+    // Setup owners cannot queue: stop/login cleanup also needs account_setup.
+    pub(super) fn account_lease_now(&self, id: Uuid, kind: &str, action: &str) -> Result<Lease> {
+        if self.account_maintenance_required(id)? {
+            self.operations.begin_account_maintenance(id, kind, action)
+        } else {
+            self.operations.begin(Some(id), None, kind, action, true)
+        }
+    }
+
+    pub(super) async fn account_lease(&self, id: Uuid, kind: &str, action: &str) -> Result<Lease> {
+        if self.account_maintenance_required(id)? {
             self.operations.begin_account_maintenance(id, kind, action)
         } else {
             self.operations.acquire(Some(id), None, kind, action).await

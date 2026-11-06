@@ -42,6 +42,7 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
         ),
         ("native_capabilities", "account_id,document"),
         ("account_quotas", "account_id,document"),
+        ("account_subscriptions", "account_id,document"),
         ("account_reset_automation", "account_id,document"),
         (
             "response_affinities",
@@ -150,5 +151,28 @@ mod tests {
             db.prepare("SELECT response_service_tier FROM requests")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn missing_or_invalid_subscription_table_is_rejected_without_repair() {
+        for mutation in [
+            "DROP TABLE account_subscriptions;",
+            "ALTER TABLE account_subscriptions RENAME COLUMN document TO obsolete;",
+        ] {
+            let db = current();
+            db.execute_batch(mutation).unwrap();
+            assert_eq!(initialize(&db).unwrap_err().code, "DATABASE_SCHEMA");
+            assert_eq!(
+                db.query_row("SELECT status FROM requests WHERE id='old'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap(),
+                "succeeded"
+            );
+            assert!(
+                db.prepare("SELECT document FROM account_subscriptions")
+                    .is_err()
+            );
+        }
     }
 }

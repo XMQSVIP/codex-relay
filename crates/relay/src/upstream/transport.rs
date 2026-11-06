@@ -27,16 +27,44 @@ use tokio_tungstenite::{
 use uuid::Uuid;
 
 type Socket = WebSocketStream<reqwest::Upgraded>;
-struct Reading {
-    socket: OwnedMutexGuard<Option<Socket>>,
+struct Reading<S = reqwest::Upgraded> {
+    socket: OwnedMutexGuard<Option<WebSocketStream<S>>>,
     completed: bool,
 }
-impl Drop for Reading {
+impl<S> Drop for Reading<S> {
     fn drop(&mut self) {
         if !self.completed {
             *self.socket = None;
         }
     }
+}
+
+async fn submit<S>(
+    socket: OwnedMutexGuard<Option<WebSocketStream<S>>>,
+    frame: String,
+) -> Result<Reading<S>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    // A cancelled write has an unknown outcome, just like an interrupted read.
+    let mut reading = Reading {
+        socket,
+        completed: false,
+    };
+    if reading
+        .socket
+        .as_mut()
+        .unwrap()
+        .send(Message::Text(frame.into()))
+        .await
+        .is_err()
+    {
+        return Err(Error::new(
+            "UPSTREAM_CONNECTION_FAILED",
+            "上游 WebSocket 发送失败；请求未重放。",
+        ));
+    }
+    Ok(reading)
 }
 
 pub(super) type Link = Arc<Mutex<Option<Socket>>>;
@@ -207,7 +235,9 @@ pub(super) async fn send(
     previous: Option<&Binding>,
     access: &ClientAccess,
     connections: &Connections,
+    before_send: impl Fn() -> Result<()>,
 ) -> Result<Transfer> {
+    before_send()?;
     let mut forwarded = headers(incoming);
     forwarded.insert(header::AUTHORIZATION, config.authorization()?);
     forwarded.insert(header::ACCEPT_ENCODING, "identity".parse().unwrap());
@@ -237,6 +267,7 @@ pub(super) async fn send(
         }
         let link = saved.unwrap_or_else(|| Arc::new(Mutex::new(None)));
         let mut socket = link.clone().lock_owned().await;
+        before_send()?;
         if socket.is_none() && previous.is_some_and(|p| p.websocket) {
             return Err(Error::new(
                 "RESPONSE_CHAIN_MISMATCH",
@@ -299,25 +330,10 @@ pub(super) async fn send(
             object.remove("stream");
             object.remove("background");
             object.insert("type".into(), Value::String("response.create".into()));
-            if socket
-                .as_mut()
-                .unwrap()
-                .send(Message::Text(frame.to_string().into()))
-                .await
-                .is_err()
-            {
-                *socket = None;
-                return Err(Error::new(
-                    "UPSTREAM_CONNECTION_FAILED",
-                    "上游 WebSocket 发送失败；请求未重放。",
-                ));
-            }
-            let stream = futures_util::stream::unfold(
-                Some(Reading {
-                    socket,
-                    completed: false,
-                }),
-                |slot: Option<Reading>| async move {
+            before_send()?;
+            let reading = submit(socket, frame.to_string()).await?;
+            let stream =
+                futures_util::stream::unfold(Some(reading), |slot: Option<Reading>| async move {
                     let mut slot = slot?;
                     loop {
                         match slot.socket.as_mut()?.next().await {
@@ -351,8 +367,7 @@ pub(super) async fn send(
                             }
                         }
                     }
-                },
-            );
+                });
             let mut response_headers = HeaderMap::new();
             response_headers.insert(header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
             return Ok(Transfer {
@@ -368,6 +383,7 @@ pub(super) async fn send(
             ));
         }
     }
+    before_send()?;
     let response = client
         .request(method, config.url(path)?)
         .headers(forwarded)
@@ -389,6 +405,131 @@ mod tests {
     };
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn cancelled_websocket_submission_discards_the_connection_with_unknown_outcome() {
+        use futures_util::FutureExt;
+        let (client, _peer) = tokio::io::duplex(64);
+        let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let link = Arc::new(Mutex::new(Some(socket)));
+        let submitting = submit(link.clone().lock_owned().await, "x".repeat(1024));
+        assert!(
+            submitting.now_or_never().is_none(),
+            "the peer must apply backpressure"
+        );
+        assert!(
+            link.lock().await.is_none(),
+            "a dropped send must discard the socket before another request can reuse it"
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_websocket_submission_rechecks_current_key_group_and_account_permissions() {
+        use crate::operations::{
+            ApiKeyCreate, ApiKeyUpdate, DEFAULT_GROUP, GroupInput, Operations,
+        };
+        for (change, code) in [
+            ("revoke", "INVALID_API_KEY"),
+            ("pause_group", "API_KEY_GROUP_DISABLED"),
+            ("disable_account", "ROUTE_CHANGED"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let ops = Operations::open(directory.path()).unwrap();
+            let config = super::super::Input {
+                base_url: "http://127.0.0.1:1/v1".into(),
+                api_key: Some("synthetic".into()),
+                transport: Transport::WebSocket,
+            }
+            .validate(None)
+            .unwrap();
+            let account = Uuid::new_v4();
+            let revision = || ops.snapshot()["revision"].as_u64().unwrap();
+            ops.register_accounts(&[(account, "fixture".into())])
+                .unwrap();
+            ops.set_inference_route(account, revision(), Some(config.provider()))
+                .unwrap();
+            let key = ops
+                .create_api_key(
+                    serde_json::from_value::<ApiKeyCreate>(
+                        json!({"name":"caller","groupId":DEFAULT_GROUP}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let access = ops.authenticate_api_key(&key.secret).unwrap();
+            let binding = Binding {
+                native_tools: false,
+                account,
+                model: "test".into(),
+                provider: config.provider(),
+                websocket: true,
+            };
+            let connections = Connections::default();
+            let link: Link = Arc::new(Mutex::new(None));
+            connections
+                .remember(
+                    account,
+                    &access,
+                    &binding.provider.id,
+                    "prior",
+                    link.clone(),
+                )
+                .await;
+            let held = link.lock().await;
+            let value = json!({"model":"test","previous_response_id":"prior","input":"x"});
+            let headers = HeaderMap::new();
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let pending = send(
+                &config,
+                &client,
+                Method::POST,
+                "responses",
+                &headers,
+                Bytes::new(),
+                &value,
+                &binding,
+                Some(&binding),
+                &access,
+                &connections,
+                || ops.check_inference_route(account, &access, &binding.provider, "test"),
+            );
+            tokio::pin!(pending);
+            assert!(futures_util::poll!(&mut pending).is_pending());
+            match change {
+                "revoke" => {
+                    ops.update_api_key(
+                        key.key.id,
+                        ApiKeyUpdate {
+                            revision: 1,
+                            state: Some("revoked".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                }
+                "pause_group" => {
+                    ops.save_group(
+                        Some(DEFAULT_GROUP),
+                        GroupInput {
+                            revision: revision(),
+                            name: "默认分组".into(),
+                            enabled: false,
+                        },
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    ops.set_account_activation(account, revision(), false, None)
+                        .unwrap();
+                }
+            }
+            drop(held);
+            assert!(
+                matches!(pending.await, Err(error) if error.code == code),
+                "change={change}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn https_and_websocket_use_the_same_connect_proxy_and_verify_tls() {
@@ -491,6 +632,7 @@ mod tests {
                 None,
                 &access,
                 &connections,
+                || Ok(()),
             )
             .await
             .unwrap();

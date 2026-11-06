@@ -94,11 +94,8 @@ fn invalid(message: &str) -> Error {
 
 impl ImageRequest {
     async fn parse(request: Request, operation: Operation) -> Result<Self> {
-        if request
-            .headers()
-            .get(header::CONTENT_ENCODING)
-            .is_some_and(|v| v != "identity")
-        {
+        let encoding = crate::http_media::content_encoding(request.headers())?.trim();
+        if !encoding.is_empty() && !encoding.eq_ignore_ascii_case("identity") {
             return Err(Error::new(
                 "UNSUPPORTED_MEDIA_TYPE",
                 "图片接口暂不接受压缩请求体。",
@@ -409,6 +406,30 @@ mod tests {
             .header(header::CONTENT_TYPE, content_type)
             .body(body.into())
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn request_encoding_rejects_duplicates_and_accepts_case_insensitive_identity() {
+        let raw = r#"{"model":"gpt-image-2","prompt":"puppy"}"#;
+        let mut duplicate = request("application/json", raw);
+        duplicate
+            .headers_mut()
+            .append(header::CONTENT_ENCODING, "identity".parse().unwrap());
+        duplicate
+            .headers_mut()
+            .append(header::CONTENT_ENCODING, "gzip".parse().unwrap());
+        assert!(
+            matches!(ImageRequest::parse(duplicate, Operation::Generate).await, Err(error) if error.code == "UNSUPPORTED_MEDIA_TYPE")
+        );
+        let mut mixed_case = request("application/json", raw);
+        mixed_case
+            .headers_mut()
+            .insert(header::CONTENT_ENCODING, "Identity".parse().unwrap());
+        assert!(
+            ImageRequest::parse(mixed_case, Operation::Generate)
+                .await
+                .is_ok()
+        );
     }
     #[tokio::test]
     async fn image_requests_preserve_wire_bytes_and_reject_ambiguous_input() {

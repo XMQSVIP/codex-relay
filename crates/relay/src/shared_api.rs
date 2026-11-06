@@ -324,7 +324,7 @@ impl SharedApi {
         let result = async {
             rpc.initialize(session.installation.client_info()?).await?;
             let mut provider = provider::read(&rpc, &session.cwd).await?;
-            if provider != job.provider {
+            if !provider.same_route(&job.provider) {
                 return Err(Error::new(
                     "ROUTE_CHANGED",
                     "桌面提供方配置已变化，请刷新后重试。",

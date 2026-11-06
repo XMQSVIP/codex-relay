@@ -251,7 +251,7 @@ impl Operations {
             .settings
             .accounts
             .iter()
-            .any(|a| a.id == id && a.route.as_ref() == Some(provider))
+            .any(|a| a.id == id && a.route.as_ref().is_some_and(|p| p.same_route(provider)))
         {
             return Ok(());
         }
@@ -311,7 +311,7 @@ impl Operations {
             .settings
             .accounts
             .iter()
-            .any(|a| a.id == id && a.route.as_ref() == Some(provider))
+            .any(|a| a.id == id && a.route.as_ref().is_some_and(|p| p.same_route(provider)))
         {
             return Err(Error::new("ROUTE_CHANGED", "额度读取期间账户配置已变化。"));
         }
@@ -489,6 +489,55 @@ mod tests {
         json!({"rateLimits":{"limitId":"codex","rateLimitReachedType":if reached {Some("rate_limit_reached")}else{None},"primary":{"usedPercent":percent,"windowDurationMins":300,"resetsAt":1}}})
     }
     #[test]
+    fn default_model_changes_preserve_quota_identity_and_reset_context() {
+        let (_dir, ops, id, mut p) = fixture();
+        ops.publish_quota_reading(
+            id,
+            &p,
+            "identity".into(),
+            normalize_reading(&raw(20.0, false), true),
+        )
+        .unwrap();
+        let context = ops.quota(id).unwrap()["resetContext"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        p.model = "new-native-default".into();
+        ops.publish_quota_reading(
+            id,
+            &p,
+            "identity".into(),
+            normalize_reading(&raw(25.0, false), true),
+        )
+        .unwrap();
+        ops.set_inference_route(
+            id,
+            ops.snapshot()["revision"].as_u64().unwrap(),
+            Some(p.clone()),
+        )
+        .unwrap();
+        assert_eq!(ops.quota(id).unwrap()["status"], "supported");
+        ops.require_reset_context(id, &p, "identity", &context)
+            .unwrap();
+        p.auth = "different-identity".into();
+        assert!(
+            ops.require_reset_context(id, &p, "identity", &context)
+                .is_err()
+        );
+        assert_eq!(
+            ops.publish_quota_reading(
+                id,
+                &p,
+                "identity".into(),
+                normalize_reading(&raw(30.0, false), true)
+            )
+            .unwrap_err()
+            .code,
+            "ROUTE_CHANGED"
+        );
+    }
+
+    #[test]
     fn benefits_follow_identity_and_partial_notifications_preserve_them() {
         let (_dir, ops, id, p) = fixture();
         let mut value = raw(20.0, false);
@@ -611,5 +660,72 @@ mod tests {
             ops.publish_quota(id, &p, "identity".into(), normalize(&raw(100.0, true)))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn failed_credential_reset_preserves_route_quota_and_subscription() {
+        let (dir, ops, id, mut provider) = fixture();
+        provider.id = "openai".into();
+        provider.base_url = "https://chatgpt.com/backend-api".into();
+        provider.auth = "native-chatgpt:fixture".into();
+        ops.set_inference_route(
+            id,
+            ops.snapshot()["revision"].as_u64().unwrap(),
+            Some(provider.clone()),
+        )
+        .unwrap();
+        ops.publish_quota(
+            id,
+            &provider,
+            "identity".into(),
+            normalize(&raw(100.0, true)),
+        )
+        .unwrap();
+        ops.observe_subscription(id, &provider, "identity", Some("plus"))
+            .unwrap();
+        let before = ops.snapshot()["revision"].as_u64().unwrap();
+        let quota = ops.quota(id).unwrap();
+        ops.inner.lock().unwrap().db.execute_batch("CREATE TRIGGER reject_quota_delete BEFORE DELETE ON account_quotas BEGIN SELECT RAISE(ABORT, 'fixture'); END;").unwrap();
+        assert_eq!(
+            ops.invalidate_credentials(id).unwrap_err().code,
+            "OPERATIONS_STORAGE"
+        );
+        assert_eq!(ops.configured_provider(id), Some(provider.clone()));
+        assert_eq!(ops.snapshot()["revision"], before);
+        assert_eq!(ops.quota(id).unwrap(), quota);
+        assert!(
+            ops.inner
+                .lock()
+                .unwrap()
+                .runtime
+                .subscriptions
+                .contains_key(&id)
+        );
+        drop(ops);
+        let reopened = Operations::open(dir.path()).unwrap();
+        assert_eq!(reopened.configured_provider(id), Some(provider));
+        assert_eq!(reopened.snapshot()["revision"], before);
+        assert_eq!(reopened.quota(id).unwrap()["blocked"], true);
+        assert!(
+            reopened
+                .inner
+                .lock()
+                .unwrap()
+                .runtime
+                .subscriptions
+                .contains_key(&id)
+        );
+        reopened
+            .inner
+            .lock()
+            .unwrap()
+            .db
+            .execute_batch("DROP TRIGGER reject_quota_delete;")
+            .unwrap();
+        reopened.invalidate_credentials(id).unwrap();
+        let inner = reopened.inner.lock().unwrap();
+        assert!(inner.settings.accounts[0].route.is_none());
+        assert!(!inner.runtime.quotas.contains_key(&id));
+        assert!(!inner.runtime.subscriptions.contains_key(&id));
     }
 }

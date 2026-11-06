@@ -47,9 +47,7 @@ pub(super) async fn inspect_access(
     crate::provider::Provider,
     crate::operations::NativeCapabilities,
 )> {
-    let lease = state
-        .account_lease(id, "native_check", "inspect_route")
-        .await?;
+    let lease = state.account_lease_now(id, "native_check", "inspect_route")?;
     let cancel = state.shutdown.child_token();
     let guard = crate::inference::CancelOnDrop(cancel.clone());
     let registration = state.profiles.register_inference(id, cancel.clone())?;
@@ -93,9 +91,7 @@ pub(super) async fn test_connection(
         return Err(Error::new("INVALID_INPUT", "测试模型 ID 格式无效。"));
     }
     let setup = state.account_setup.lock().await;
-    let lease = state
-        .account_lease(id, "diagnostic", "connection_test")
-        .await?;
+    let lease = state.account_lease_now(id, "diagnostic", "connection_test")?;
     drop(setup);
     let cancel = state.shutdown.child_token();
     let guard = crate::inference::CancelOnDrop(cancel.clone());
@@ -237,9 +233,7 @@ pub(super) async fn verify_feature(
     Json(input): Json<VerifyFeatureInput>,
 ) -> Result<Json<Value>> {
     let setup = state.account_setup.lock().await;
-    let lease = state
-        .account_lease(id, "diagnostic", "verify_feature")
-        .await?;
+    let lease = state.account_lease_now(id, "diagnostic", "verify_feature")?;
     drop(setup);
     let cancel = state.shutdown.child_token();
     let _guard = crate::inference::CancelOnDrop(cancel.clone());

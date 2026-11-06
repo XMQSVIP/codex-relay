@@ -77,6 +77,37 @@ fn caps(search: bool) -> NativeCapabilities {
     }
 }
 
+#[test]
+fn default_model_changes_preserve_capability_discovery_and_verification() {
+    let (_root, ops, id, _key) = setup();
+    let mut actual = provider();
+    actual.model = "new-native-default".into();
+    let mut discovered = caps(true);
+    discovered.provider = codex_relay::operations::runtime::fingerprint(&actual);
+    ops.publish_capabilities(id, discovered.clone()).unwrap();
+    ops.record_feature_verification(id, &actual, "build-a", Feature::WebSearch, None)
+        .unwrap();
+    actual.model = "another-native-default".into();
+    ops.set_inference_route(id, revision(&ops), Some(actual.clone()))
+        .unwrap();
+    let catalog = ops.capabilities()["accounts"][0]["capabilities"].clone();
+    assert_eq!(catalog["stale"], false);
+    assert_eq!(catalog["verifiedModel"], "new-native-default");
+    assert_eq!(catalog["verifiedFeatures"], json!(["webSearch"]));
+    actual.base_url = "http://192.0.2.2/v1".into();
+    discovered.provider = codex_relay::operations::runtime::fingerprint(&actual);
+    assert_eq!(
+        ops.publish_capabilities(id, discovered).unwrap_err().code,
+        "ROUTE_CHANGED"
+    );
+    assert_eq!(
+        ops.record_feature_verification(id, &actual, "build-a", Feature::WebSearch, None)
+            .unwrap_err()
+            .code,
+        "ROUTE_CHANGED"
+    );
+}
+
 #[tokio::test]
 async fn automatic_capabilities_need_no_catalog_probe_enablement_or_model_binding() {
     let (_root, ops, id, key) = setup();

@@ -28,7 +28,10 @@ async fn upstream(
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
     let mut headers = HeaderMap::new();
-    headers.insert("content-type", "text/event-stream".parse().unwrap());
+    headers.insert(
+        "content-type",
+        "Text/Event-Stream; charset=utf-8".parse().unwrap(),
+    );
     let events = if text == "fail" {
         vec![
             json!({"type":"response.failed","response":{"error":{"message":"PRIVATE_FAILURE_TEXT"}}}),
@@ -41,7 +44,13 @@ async fn upstream(
     };
     (
         headers,
-        events.iter().map(|v| format!("data: {v}\n\n")).collect(),
+        format!(
+            "\u{feff}{}",
+            events
+                .iter()
+                .map(|v| format!("data: {v}\r\r"))
+                .collect::<String>()
+        ),
     )
 }
 async fn call(app: &Router, path: &str, body: Value, authorized: bool) -> axum::response::Response {

@@ -50,7 +50,7 @@ fn digest(value: &impl serde::Serialize) -> Result<[u8; 32]> {
     crate::profiles::warm::digest(value)
 }
 pub(super) fn provider_digest(provider: &crate::provider::Provider) -> Result<[u8; 32]> {
-    digest(provider)
+    digest(&provider.route_identity())
 }
 fn history_digest(history: &[Value]) -> Result<[u8; 32]> {
     let mut history = super::request::normalize_input(&json!(history))?;

@@ -193,7 +193,7 @@ async fn read(
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if content_type.starts_with("application/json") {
+    if crate::http_media::is_type(content_type, "application/json") {
         let mut document = Vec::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -213,7 +213,7 @@ async fn read(
     // The ChatGPT Codex endpoint currently omits Content-Type on some valid
     // streamed compaction responses. Treat an absent header as SSE and still
     // reject an explicitly incompatible media type.
-    if !content_type.is_empty() && !content_type.starts_with("text/event-stream") {
+    if !content_type.is_empty() && !crate::http_media::is_type(content_type, "text/event-stream") {
         return Err(invalid());
     }
     let mut stream = response.bytes_stream();
@@ -276,6 +276,68 @@ async fn send_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn response_media_type_variants_preserve_compaction_results() {
+        let response = json!({
+            "id":"cmp_response", "status":"completed",
+            "output":[{"type":"compaction","encrypted_content":"opaque"}],
+            "usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}
+        });
+        for (content_type, is_json) in [
+            (Some("Application/JSON; charset=utf-8"), true),
+            (Some("Text/Event-Stream"), false),
+            (Some("TEXT/EVENT-STREAM ; charset=utf-8"), false),
+            (None, false),
+        ] {
+            let body = if is_json {
+                response.to_string()
+            } else {
+                format!(
+                    "\u{feff}data: {}\r\r",
+                    json!({"type":"response.completed","response":response})
+                )
+            };
+            let mut builder = axum::http::Response::builder();
+            if let Some(content_type) = content_type {
+                builder = builder.header("content-type", content_type);
+            }
+            let http = reqwest::Response::from(builder.body(reqwest::Body::from(body)).unwrap());
+            let (tx, mut rx) = mpsc::channel(8);
+            let mut observed = None;
+            read(http, &tx, &CancellationToken::new(), &mut observed)
+                .await
+                .unwrap();
+            let event = rx.recv().await.unwrap();
+            assert_eq!(event["response"], response, "{content_type:?}");
+            assert_eq!(event["sequence_number"], 0);
+            assert_eq!(observed.unwrap().usage.unwrap().total_tokens, 6);
+        }
+    }
+
+    #[tokio::test]
+    async fn incompatible_response_media_type_prefixes_are_rejected() {
+        for content_type in ["text/event-streaming", "application/jsonp"] {
+            let http = reqwest::Response::from(
+                axum::http::Response::builder()
+                    .header("content-type", content_type)
+                    .body(reqwest::Body::from("{}"))
+                    .unwrap(),
+            );
+            let (tx, _) = mpsc::channel(8);
+            let mut observed = None;
+            assert_eq!(
+                read(http, &tx, &CancellationToken::new(), &mut observed)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "UPSTREAM_INVALID_RESPONSE",
+                "{content_type}"
+            );
+            assert!(observed.is_none());
+        }
+    }
+
     #[test]
     fn real_items_are_preserved_and_usage_unknown_stays_unknown() {
         let item = json!({"type":"compaction","id":"cmp_test","encrypted_content":"opaque", "future_field":{"v":1}});

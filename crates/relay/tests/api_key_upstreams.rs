@@ -16,7 +16,7 @@ use codex_relay::{
 use serde_json::{Value, json};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tower::ServiceExt;
 
@@ -25,9 +25,20 @@ struct Upstream {
     calls: Mutex<Vec<(String, String, Bytes)>>,
     retrievals: Mutex<Vec<Retrieval>>,
     response_tier: Mutex<Value>,
+    response_content_type: Mutex<Option<String>>,
+    response_override: Mutex<Option<String>>,
+    sse_layout: Mutex<Option<(String, String)>>,
+    sse_keep_open: AtomicBool,
+    sse_status: Mutex<Option<String>>,
+    ws_handshake: Mutex<Option<Arc<HandshakeGate>>>,
     sockets: AtomicUsize,
     ids: AtomicUsize,
     ws_status: AtomicUsize,
+}
+#[derive(Default)]
+struct HandshakeGate {
+    entered: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
 }
 struct Retrieval {
     method: Method,
@@ -120,11 +131,17 @@ async fn http(State(state): State<Arc<Upstream>>, request: Request) -> Response 
         }
         return Json(json!({"output":"search result","encrypted_output":"OPAQUE_SEARCH","results":[{"ref_id":"turn0search0","url":"https://example.com","future_field":true}],"unknown":{"kept":true}})).into_response();
     }
+    if let Some(body) = state.response_override.lock().unwrap().clone() {
+        return ([("content-type", "application/json")], body).into_response();
+    }
     let id = format!("resp_{}", state.ids.fetch_add(1, Ordering::SeqCst));
-    let response = with_response_tier(
+    let mut response = with_response_tier(
         &state,
         json!({"id":id,"object":"response","status":"completed","model":"test-model","output":automatic_compaction_output(&value,&id),"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6},"upstream_extension":{"kept":true}}),
     );
+    if let Some(status) = state.sse_status.lock().unwrap().as_ref() {
+        response["status"] = json!(status);
+    }
     if value["input"] == "latency-fixture" {
         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     }
@@ -140,11 +157,58 @@ async fn http(State(state): State<Arc<Upstream>>, request: Request) -> Response 
                 )
             })
             .collect::<String>();
-        return ([("content-type","text/event-stream"),("x-upstream-extension","yes")],format!("event: vendor.extension\ndata: {{\"type\":\"vendor.extension\",\"extra\":7}}\n\n{compact}data: {{\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}}\n\ndata: {}\n\n",json!({"type":"response.completed","response":response}))).into_response();
+        let content_type = state
+            .response_content_type
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "text/event-stream".into());
+        let mut body = format!(
+            "event: vendor.extension\ndata: {{\"type\":\"vendor.extension\",\"extra\":7}}\n\n{compact}data: {{\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}}\n\ndata: {}\n\n",
+            json!({"type":format!("response.{}", response["status"].as_str().unwrap()),"response":response})
+        );
+        if let Some((line, blank)) = state.sse_layout.lock().unwrap().as_ref() {
+            body = format!(
+                "\u{feff}{}",
+                body.split("\n\n")
+                    .filter(|frame| !frame.is_empty())
+                    .map(|frame| {
+                        format!(
+                            "{}{line}: comment{blank}{blank}",
+                            frame.split('\n').collect::<Vec<_>>().join(line)
+                        )
+                    })
+                    .collect::<String>()
+            );
+        }
+        let body = if state.sse_keep_open.load(Ordering::SeqCst) {
+            use futures_util::StreamExt;
+            Body::from_stream(
+                futures_util::stream::once(async move {
+                    Ok::<_, std::convert::Infallible>(Bytes::from(body))
+                })
+                .chain(futures_util::stream::pending()),
+            )
+        } else {
+            Body::from(body)
+        };
+        return (
+            [
+                ("content-type", content_type.as_str()),
+                ("x-upstream-extension", "yes"),
+            ],
+            body,
+        )
+            .into_response();
     }
     Json(if path.contains("/images/"){json!({"data":[{"b64_json":"aGVsbG8="}],"vendor":true})}else if path.ends_with("/compact"){with_response_tier(&state,json!({"object":"response.compaction","output":[{"type":"compaction","encrypted_content":"opaque"}]}))}else{response}).into_response()
 }
 async fn websocket(State(state): State<Arc<Upstream>>, ws: WebSocketUpgrade) -> Response {
+    let gate = state.ws_handshake.lock().unwrap().clone();
+    if let Some(gate) = gate {
+        gate.entered.notify_one();
+        gate.resume.notified().await;
+    }
     let status = state.ws_status.load(Ordering::SeqCst);
     if status != 0 {
         return StatusCode::from_u16(status as u16).unwrap().into_response();
@@ -1064,6 +1128,142 @@ async fn response_retrieval_preserves_queries_and_safe_headers_without_changing_
 }
 
 #[tokio::test]
+async fn revocation_during_handshake_prevents_websocket_submission_and_http_fallback() {
+    use codex_relay::operations::ApiKeyUpdate;
+    for status in [0, 404] {
+        let f = Fixture::new("ws-first").await;
+        let gate = Arc::new(HandshakeGate::default());
+        *f.upstream.ws_handshake.lock().unwrap() = Some(gate.clone());
+        f.upstream.ws_status.store(status, Ordering::SeqCst);
+        let access = f.state.operations.authenticate_api_key(&f.key).unwrap();
+        let pending = f.request(
+            "POST",
+            "/v1/responses",
+            json!({"model":"test-model","input":"x"}).to_string(),
+            "application/json",
+        );
+        tokio::pin!(pending);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::select! {
+                _ = gate.entered.notified() => {},
+                _ = &mut pending => panic!("request must wait for the handshake"),
+            }
+        })
+        .await
+        .unwrap();
+        f.state
+            .operations
+            .update_api_key(
+                access.key_id,
+                ApiKeyUpdate {
+                    revision: 1,
+                    state: Some("revoked".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        gate.resume.notify_one();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(3), pending)
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "handshake={status}"
+        );
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "INVALID_API_KEY");
+        assert_eq!(f.state.operations.snapshot()["active"], 0);
+        assert!(
+            !f.upstream
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(path, _, _)| path == "ws" || path.ends_with("/responses")),
+            "revoked requests must not reach either model transport"
+        );
+    }
+}
+
+#[tokio::test]
+async fn disconnect_after_sse_terminal_preserves_model_result_and_usage() {
+    use futures_util::StreamExt;
+    for (status, outcome, error) in [
+        ("completed", "completed", None),
+        ("failed", "failed", Some("UPSTREAM_REQUEST_FAILED")),
+        ("incomplete", "failed", Some("UPSTREAM_INCOMPLETE")),
+        ("in_progress", "cancelled", None),
+    ] {
+        let f = Fixture::new("http-sse").await;
+        f.upstream.sse_keep_open.store(true, Ordering::SeqCst);
+        *f.upstream.sse_status.lock().unwrap() = Some(status.into());
+        let response = f
+            .request(
+                "POST",
+                "/v1/responses",
+                json!({"model":"test-model","input":"x","stream":true}).to_string(),
+                "application/json",
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut wire = Vec::new();
+            loop {
+                wire.extend_from_slice(&body.next().await.unwrap().unwrap());
+                if wire.ends_with(b"\n\n")
+                    && String::from_utf8_lossy(&wire).contains(&format!("response.{status}"))
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(body);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let records = f.state.operations.statistics(Default::default()).unwrap();
+                let record = &records["records"][0];
+                if record["deliveryStatus"] == "disconnected" {
+                    assert_eq!(
+                        record["modelOutcome"], outcome,
+                        "terminal={status}: {record}"
+                    );
+                    if let Some(error) = error {
+                        assert_eq!(record["errorCode"], error);
+                    }
+                    if status == "in_progress" {
+                        assert!(record["inputTokens"].is_null());
+                        assert!(record["outputTokens"].is_null());
+                    } else {
+                        assert_eq!(record["inputTokens"], 4);
+                        assert_eq!(record["outputTokens"], 2);
+                    }
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(f.state.operations.snapshot()["active"], 0);
+        assert_eq!(
+            f.upstream
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _, _)| path.ends_with("/responses"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
 async fn websocket_disconnect_is_never_replayed_and_releases_capacity() {
     let f = Fixture::new("ws-first").await;
     let r = f
@@ -1105,6 +1305,9 @@ async fn downstream_websocket_bridges_both_upstream_transports() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     for transport in ["http-sse", "ws-first"] {
         let f = Fixture::new(transport).await;
+        *f.upstream.response_content_type.lock().unwrap() =
+            Some("Text/Event-Stream; charset=utf-8".into());
+        *f.upstream.sse_layout.lock().unwrap() = Some(("\r".into(), "\r".into()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/v1/responses", listener.local_addr().unwrap());
         let app = f.app.clone();
@@ -1159,6 +1362,232 @@ async fn downstream_websocket_bridges_both_upstream_transports() {
         socket.close(None).await.unwrap();
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn downstream_websocket_preserves_json_response_outcomes_and_rejects_invalid_bodies() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let f = Fixture::new("http-sse").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/responses", listener.local_addr().unwrap());
+    let app = f.app.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut request = url.into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("host", "127.0.0.1:4317".parse().unwrap());
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {}", f.key).parse().unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let cases = [
+        (json!({"id":"json_failed","status":"failed","output":[],"error":{"code":"vendor_failure","message":"failed"},"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}).to_string(), "response.failed", Some("UPSTREAM_REQUEST_FAILED")),
+        (json!({"id":"json_incomplete","status":"incomplete","output":[],"incomplete_details":{"reason":"max_output_tokens"}}).to_string(), "response.incomplete", Some("UPSTREAM_INCOMPLETE")),
+        (json!({"error":{"code":"vendor_error","message":"rejected"}}).to_string(), "error", Some("UPSTREAM_REQUEST_FAILED")),
+        ("not json".into(), "error", Some("UPSTREAM_INVALID_RESPONSE")),
+        ("[]".into(), "error", Some("UPSTREAM_INVALID_RESPONSE")),
+        (json!({"id":"missing_status","output":[]}).to_string(), "error", Some("UPSTREAM_INVALID_RESPONSE")),
+        (json!({"id":"json_cancelled","status":"cancelled","output":[]}).to_string(), "error", Some("REQUEST_CANCELLED")),
+        (json!({"id":"json_completed","status":"completed","output":[]}).to_string(), "response.completed", None),
+        (json!({"id":"json_queued","status":"queued","output":[]}).to_string(), "response.queued", None),
+        (json!({"id":"json_progress","status":"in_progress","output":[]}).to_string(), "response.in_progress", None),
+    ];
+    for (index, (body, expected_type, error_code)) in cases.iter().enumerate() {
+        *f.upstream.response_override.lock().unwrap() = Some(body.clone());
+        let lane = format!("case-{index}");
+        let model = format!("json-case-{index}");
+        socket.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({"type":"response.create","stream_id":lane,"model":model,"input":"fixture","background":true}).to_string().into()
+        )).await.unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while let Some(Ok(message)) = socket.next().await {
+                if let Ok(text) = message.to_text() {
+                    return serde_json::from_str::<Value>(text).unwrap();
+                }
+            }
+            panic!("socket ended");
+        })
+        .await
+        .unwrap();
+        assert_eq!(event["stream_id"], lane, "{event}");
+        assert_eq!(event["type"], *expected_type, "{body}: {event}");
+        if expected_type.starts_with("response.") {
+            assert_eq!(
+                event["response"],
+                serde_json::from_str::<Value>(body).unwrap()
+            );
+        } else if *error_code == Some("UPSTREAM_REQUEST_FAILED") {
+            assert_eq!(event["error"]["code"], "vendor_error");
+        } else {
+            assert_eq!(event["error"]["code"].as_str(), *error_code);
+        }
+        let stats = f.state.operations.statistics(Default::default()).unwrap();
+        let row = stats["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["model"] == model)
+            .unwrap();
+        assert_eq!(
+            row["status"],
+            if *error_code == Some("REQUEST_CANCELLED") {
+                "cancelled"
+            } else if error_code.is_some() {
+                "failed"
+            } else {
+                "succeeded"
+            },
+            "{row}"
+        );
+        assert_eq!(row["errorCode"].as_str(), *error_code, "{row}");
+    }
+    assert_eq!(
+        f.upstream
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _, _)| path.ends_with("/responses"))
+            .count(),
+        cases.len()
+    );
+    assert_eq!(f.state.operations.snapshot()["active"], 0);
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn direct_json_media_types_and_encodings_match_native_ingress_validation() {
+    use std::io::Write;
+    let f = Fixture::new("http-sse").await;
+    let value = json!({"model":"test-model","input":"fixture"});
+    let original = value.to_string();
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gzip.write_all(original.as_bytes()).unwrap();
+    let compressed = gzip.finish().unwrap();
+    for content_type in [
+        "Application/JSON",
+        "Application/Vnd.Vendor+JSON; charset=UTF-8",
+    ] {
+        let response = f
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("host", "127.0.0.1:4317")
+                    .header("authorization", format!("Bearer {}", f.key))
+                    .header("content-type", content_type)
+                    .header("content-encoding", "GZIP")
+                    .body(Body::from(compressed.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{content_type}");
+        to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&f.upstream.calls.lock().unwrap().last().unwrap().2)
+                .unwrap(),
+            value
+        );
+    }
+    let calls = f.upstream.calls.lock().unwrap().len();
+    for content_type in ["text/vendor+json", "application/jsonp"] {
+        let response = f
+            .request("POST", "/v1/responses", original.clone(), content_type)
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{content_type}"
+        );
+    }
+    for encodings in [
+        vec!["identity", "identity"],
+        vec!["gzip", "identity"],
+        vec!["gzip, identity"],
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("host", "127.0.0.1:4317")
+            .header("authorization", format!("Bearer {}", f.key))
+            .header("content-type", "application/json");
+        for encoding in encodings {
+            request = request.header("content-encoding", encoding);
+        }
+        let response = f
+            .app
+            .clone()
+            .oneshot(request.body(Body::from(original.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("host", "127.0.0.1:4317")
+                .header("authorization", format!("Bearer {}", f.key))
+                .header("content-type", "application/json")
+                .header(
+                    "content-encoding",
+                    axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+                )
+                .body(Body::from(original))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        f.upstream.calls.lock().unwrap().len(),
+        calls,
+        "invalid encodings must be rejected before dispatch"
+    );
+    assert_eq!(f.state.operations.snapshot()["active"], 0);
+}
+
+#[tokio::test]
+async fn malformed_successful_http_response_is_forwarded_but_recorded_as_failed() {
+    let f = Fixture::new("http-sse").await;
+    let original = "{\"id\":\"truncated";
+    *f.upstream.response_override.lock().unwrap() = Some(original.into());
+    let response = f
+        .request(
+            "POST",
+            "/v1/responses",
+            json!({"model":"test-model","input":"fixture"}).to_string(),
+            "application/json",
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let id = response.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap(),
+        original
+    );
+    let stats = f.state.operations.statistics(Default::default()).unwrap();
+    let row = stats["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["status"], "failed");
+    assert_eq!(row["errorCode"], "UPSTREAM_INVALID_RESPONSE");
+    assert_eq!(f.state.operations.snapshot()["active"], 0);
 }
 
 #[tokio::test]
@@ -1830,6 +2259,189 @@ async fn streaming_first_response_uses_a_timestamp_instead_of_an_elapsed_duratio
         "upstream delay must not collapse to zero: {record}"
     );
     assert!(first <= record["totalMs"].as_u64().unwrap());
+}
+
+#[tokio::test]
+async fn event_stream_content_type_variants_preserve_usage_and_response_ownership() {
+    let f = Fixture::new("http-sse").await;
+    for content_type in [
+        "Text/Event-Stream",
+        "TEXT/EVENT-STREAM; charset=utf-8",
+        "text/event-stream ; charset=utf-8",
+    ] {
+        *f.upstream.response_content_type.lock().unwrap() = Some(content_type.into());
+        let response = f
+            .request(
+                "POST",
+                "/v1/responses",
+                json!({"model":"test-model","input":"plain-history-fixture","stream":true})
+                    .to_string(),
+                "application/json",
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let request_id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let completed = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .find(|event| event["type"] == "response.completed")
+            .unwrap();
+        let data = f.state.operations.statistics(Default::default()).unwrap();
+        let row = data["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == request_id)
+            .unwrap();
+        assert_eq!(row["upstreamTransport"], "sse", "{content_type}");
+        assert_eq!(row["inputTokens"], 4, "{content_type}: {row}");
+        assert_eq!(row["outputTokens"], 2, "{content_type}: {row}");
+        assert!(row["firstDeltaMs"].is_u64(), "{content_type}: {row}");
+        let retrieved = f
+            .request(
+                "GET",
+                &format!(
+                    "/v1/responses/{}",
+                    completed["response"]["id"].as_str().unwrap()
+                ),
+                Body::empty(),
+                "application/json",
+            )
+            .await;
+        assert_eq!(
+            retrieved.status(),
+            StatusCode::OK,
+            "{content_type}: response binding was lost"
+        );
+        to_bytes(retrieved.into_body(), 1024 * 1024).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn event_stream_layouts_preserve_wire_bytes_usage_and_ownership() {
+    let f = Fixture::new("http-sse").await;
+    for (line, blank) in [("\n", "\n"), ("\r", "\r"), ("\n", "\r\n"), ("\r\n", "\r")] {
+        *f.upstream.sse_layout.lock().unwrap() = Some((line.into(), blank.into()));
+        let response = f
+            .request(
+                "POST",
+                "/v1/responses",
+                json!({"model":"test-model","input":"plain-history-fixture","stream":true})
+                    .to_string(),
+                "application/json",
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let request_id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let wire = std::str::from_utf8(&bytes).unwrap();
+        assert!(wire.starts_with('\u{feff}'));
+        assert!(wire.contains(&format!(": comment{blank}{blank}")));
+        let data = f.state.operations.statistics(Default::default()).unwrap();
+        let row = data["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == request_id)
+            .unwrap();
+        assert_eq!(row["status"], "succeeded", "{row}");
+        assert_eq!(row["inputTokens"], 4);
+        assert_eq!(row["outputTokens"], 2);
+        assert!(row["firstDeltaMs"].is_u64());
+        let completed: Value = wire
+            .split(['\r', '\n'])
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .find(|event| event["type"] == "response.completed")
+            .unwrap();
+        let retrieved = f
+            .request(
+                "GET",
+                &format!(
+                    "/v1/responses/{}",
+                    completed["response"]["id"].as_str().unwrap()
+                ),
+                Body::empty(),
+                "application/json",
+            )
+            .await;
+        assert_eq!(retrieved.status(), StatusCode::OK);
+        to_bytes(retrieved.into_body(), 1024 * 1024).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn all_direct_ingress_paths_reject_ambiguous_encodings_before_dispatch() {
+    let f = Fixture::new("http-sse").await;
+    let before = f.upstream.calls.lock().unwrap().len();
+    for path in [
+        "/v1/responses",
+        "/v1/responses/compact",
+        "/v1/alpha/search",
+        "/v1/images/generations",
+        "/v1/images/edits",
+    ] {
+        for encodings in [
+            vec![b"identity".as_slice(), b"gzip"],
+            vec![b"\xff".as_slice()],
+            vec![b"identity,gzip".as_slice()],
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("host", "127.0.0.1:4317")
+                .header("authorization", format!("Bearer {}", f.key))
+                .header("content-type", "application/json");
+            for encoding in encodings {
+                request = request.header(
+                    "content-encoding",
+                    axum::http::HeaderValue::from_bytes(encoding).unwrap(),
+                );
+            }
+            let response = f.app.clone().oneshot(request.body(Body::from(json!({"model":"test-model","id":"s","input":"x","commands":{},"prompt":"x"}).to_string())).unwrap()).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{path}"
+            );
+            let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["code"],
+                "UNSUPPORTED_MEDIA_TYPE"
+            );
+        }
+    }
+    let multipart = "--fixture\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ntest-model\r\n--fixture--\r\n";
+    for encoding in ["gzip", "br", "identity,gzip"] {
+        let response = f
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/images/edits")
+                    .header("host", "127.0.0.1:4317")
+                    .header("authorization", format!("Bearer {}", f.key))
+                    .header("content-type", "multipart/form-data; boundary=fixture")
+                    .header("content-encoding", encoding)
+                    .body(Body::from(multipart))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    assert_eq!(f.upstream.calls.lock().unwrap().len(), before);
+    assert_eq!(f.state.operations.snapshot()["active"], 0);
 }
 
 #[tokio::test]

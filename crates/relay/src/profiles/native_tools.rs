@@ -211,7 +211,7 @@ impl Profiles {
                 )?;
             }
             let digest = warm::digest(
-                &json!({"config":config,"credential":credential.as_ref().map(|c|&c.identity)}),
+                &json!({"config":warm::inference_config_digest(&config)?,"credential":credential.as_ref().map(|c|&c.identity)}),
             )?;
             {
                 let mut state = backend.response_worker.lock().unwrap();

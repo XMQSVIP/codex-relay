@@ -97,7 +97,6 @@ fn generalized(current: &str, next: &str) -> bool {
 }
 
 pub(super) fn load(db: &Connection) -> Result<HashMap<Uuid, Snapshot>> {
-    db.execute_batch("CREATE TABLE IF NOT EXISTS account_subscriptions (account_id TEXT PRIMARY KEY, document TEXT NOT NULL)").map_err(storage)?;
     let mut stmt = db
         .prepare("SELECT account_id, document FROM account_subscriptions")
         .map_err(storage)?;
@@ -184,8 +183,8 @@ pub(super) fn clear(inner: &mut Inner, id: Uuid) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn retain_routes(inner: &mut Inner, next: &super::Settings) -> Result<()> {
-    let removed: Vec<_> = inner
+pub(super) fn removed_routes(inner: &Inner, next: &super::Settings) -> Vec<Uuid> {
+    inner
         .runtime
         .subscriptions
         .iter()
@@ -207,11 +206,7 @@ pub(super) fn retain_routes(inner: &mut Inner, next: &super::Settings) -> Result
                 })
         })
         .map(|(id, _)| *id)
-        .collect();
-    for id in removed {
-        clear(inner, id)?;
-    }
-    Ok(())
+        .collect()
 }
 
 fn current(inner: &Inner, id: Uuid) -> Option<&Snapshot> {
@@ -386,7 +381,7 @@ impl Operations {
             .settings
             .accounts
             .iter()
-            .any(|a| a.id == id && a.route.as_ref() == Some(provider))
+            .any(|a| a.id == id && a.route.as_ref().is_some_and(|p| p.same_route(provider)))
         {
             return Ok(());
         }
@@ -431,6 +426,80 @@ mod tests {
             expires_at: expiry,
             will_renew: Some(true),
         }
+    }
+
+    #[test]
+    fn failed_subscription_cleanup_preserves_both_route_snapshots() {
+        let (dir, ops, id, provider) = fixture();
+        let before = ops.snapshot()["revision"].as_u64().unwrap();
+        {
+            let inner = ops.inner.lock().unwrap();
+            inner.db.execute_batch("CREATE TRIGGER reject_subscription_delete BEFORE DELETE ON account_subscriptions BEGIN SELECT RAISE(ABORT, 'fixture'); END;").unwrap();
+        }
+        assert_eq!(
+            ops.set_inference_route(id, before, None).unwrap_err().code,
+            "OPERATIONS_STORAGE"
+        );
+        assert_eq!(ops.configured_provider(id), Some(provider.clone()));
+        assert_eq!(ops.snapshot()["revision"], before);
+        assert!(
+            ops.inner
+                .lock()
+                .unwrap()
+                .runtime
+                .subscriptions
+                .contains_key(&id)
+        );
+        drop(ops);
+        let reopened = Operations::open(dir.path()).unwrap();
+        assert_eq!(reopened.configured_provider(id), Some(provider));
+        assert_eq!(reopened.snapshot()["revision"], before);
+        reopened
+            .inner
+            .lock()
+            .unwrap()
+            .db
+            .execute_batch("DROP TRIGGER reject_subscription_delete;")
+            .unwrap();
+        reopened.set_inference_route(id, before, None).unwrap();
+        assert!(
+            !reopened
+                .inner
+                .lock()
+                .unwrap()
+                .runtime
+                .subscriptions
+                .contains_key(&id)
+        );
+    }
+
+    #[test]
+    fn default_model_changes_preserve_subscription_identity_and_inflight_results() {
+        let (_dir, ops, id, mut p) = fixture();
+        let now = crate::now_ms();
+        let expiry = now + 30 * RETRY_MS;
+        assert!(
+            ops.subscription_attempt(id, &p, "identity", now, false)
+                .unwrap()
+        );
+        p.model = "new-native-default".into();
+        ops.observe_subscription(id, &p, "identity", Some("plus"))
+            .unwrap();
+        ops.set_inference_route(
+            id,
+            ops.snapshot()["revision"].as_u64().unwrap(),
+            Some(p.clone()),
+        )
+        .unwrap();
+        ops.finish_subscription(id, &p, "identity", now, Ok(reading(expiry)))
+            .unwrap();
+        assert_eq!(ops.subscription(id).unwrap()["status"], "current");
+        assert_eq!(ops.subscription(id).unwrap()["expiresAt"], expiry);
+        p.auth = "native-chatgpt:other-identity".into();
+        assert!(
+            ops.finish_subscription(id, &p, "identity", now, Ok(reading(expiry)))
+                .is_err()
+        );
     }
 
     #[test]

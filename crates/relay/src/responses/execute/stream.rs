@@ -45,6 +45,9 @@ pub(super) async fn collect(
     tokio::pin!(deadline);
     loop {
         let event = tokio::select! {
+            // Cancellation can race an already queued terminal event. Observe
+            // it first; cleanup still consumes that event to confirm the turn.
+            biased;
             _ = cancel.cancelled() => return Err(Error::new("REQUEST_CANCELLED", "请求已取消。")),
             _ = outgoing.closed() => return Err(Error::new("STREAM_CONSUMER_CLOSED", "客户端已断开。")),
             _ = rpc.closed() => return Err(Error::new("RPC_CLOSED", "原生后端已断开。")),

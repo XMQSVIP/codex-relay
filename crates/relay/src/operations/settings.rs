@@ -256,7 +256,15 @@ impl Operations {
         account.route = Some(provider);
         Self::save(&mut inner, next, revision)
     }
-    pub(super) fn save(inner: &mut Inner, mut next: Settings, revision: u64) -> Result<()> {
+    pub(super) fn save(inner: &mut Inner, next: Settings, revision: u64) -> Result<()> {
+        Self::save_with_cleanup(inner, next, revision, |_| Ok(()))
+    }
+    pub(super) fn save_with_cleanup(
+        inner: &mut Inner,
+        mut next: Settings,
+        revision: u64,
+        cleanup: impl FnOnce(&rusqlite::Connection) -> Result<()>,
+    ) -> Result<()> {
         if revision != inner.settings.revision {
             return Err(Error::new(
                 "CONFIG_CONFLICT",
@@ -264,13 +272,23 @@ impl Operations {
             ));
         }
         next.revision = revision + 1;
-        inner
-            .db
-            .execute(
-                "UPDATE settings SET document=?1 WHERE id=1",
-                [serde_json::to_string(&next)?],
+        let removed_subscriptions = super::subscription::removed_routes(inner, &next);
+        let tx = inner.db.transaction().map_err(storage)?;
+        tx.execute(
+            "UPDATE settings SET document=?1 WHERE id=1",
+            [serde_json::to_string(&next)?],
+        )
+        .map_err(storage)?;
+        for id in &removed_subscriptions {
+            tx.execute(
+                "DELETE FROM account_subscriptions WHERE account_id=?1",
+                [id.to_string()],
             )
             .map_err(storage)?;
+        }
+        cleanup(&tx)?;
+        tx.commit().map_err(storage)?;
+        // Publish runtime changes only after every durable change commits.
         for (id, caps) in &mut inner.runtime.catalogs {
             if !next.accounts.iter().any(|a| {
                 a.id == *id
@@ -307,7 +325,9 @@ impl Operations {
             .proxy_changes
             .retain(|id, _| next.accounts.iter().any(|a| a.id == *id && !a.deleting));
         inner.runtime.scheduling.invalidate(&inner.settings, &next);
-        super::subscription::retain_routes(inner, &next)?;
+        for id in removed_subscriptions {
+            inner.runtime.subscriptions.remove(&id);
+        }
         inner.settings = next;
         inner.changed.notify_waiters();
         Ok(())
@@ -427,15 +447,20 @@ impl Operations {
         }
         next.accounts.retain(|a| a.id != id);
         let revision = next.revision;
-        Self::save(&mut inner, next, revision)?;
-        let tx = inner.db.transaction().map_err(storage)?;
-        tx.execute(
-            "DELETE FROM response_affinities WHERE account=?1",
-            [id.to_string()],
-        )
-        .map_err(storage)?;
-        tx.commit().map_err(storage)?;
-        super::subscription::clear(&mut inner, id)?;
+        Self::save_with_cleanup(&mut inner, next, revision, |db| {
+            db.execute(
+                "DELETE FROM response_affinities WHERE account=?1",
+                [id.to_string()],
+            )
+            .map_err(storage)?;
+            db.execute(
+                "DELETE FROM account_subscriptions WHERE account_id=?1",
+                [id.to_string()],
+            )
+            .map_err(storage)?;
+            Ok(())
+        })?;
+        inner.runtime.subscriptions.remove(&id);
         Ok(())
     }
     pub fn set_queue(&self, revision: u64, limit: u32, timeout_seconds: u32) -> Result<()> {
@@ -586,5 +611,63 @@ impl Operations {
         json!({"revision":inner.settings.revision,"globalLimit":inner.settings.effective_global_limit(),"globalLimitAuto":inner.settings.global_limit_auto,"manualGlobalLimit":inner.settings.global_limit,"accountCapacity":inner.settings.account_capacity(),"queueLimit":inner.settings.queue_limit,"queueTimeoutSeconds":inner.settings.queue_timeout_seconds,"nativeAffinityTtlHours":inner.settings.native_affinity_ttl_hours,"queued":inner.pending.len(),"active":Self::active_count(&inner,None,None),"storageHealthy":inner.storage_healthy,"draining":inner.draining,"retentionDays":inner.settings.retention_days,
             "groups":inner.settings.groups.iter().map(|g|{let mut value=serde_json::to_value(g).unwrap();value["active"]=Self::active_count(&inner,None,Some(g.id)).into();value["queued"]=Self::queued_count(&inner,None,Some(g.id)).into();value["memberCount"]=inner.settings.accounts.iter().filter(|a|a.belongs_to(g.id)).count().into();value}).collect::<Vec<_>>(),
             "accounts":inner.settings.accounts.iter().map(|a|{let mut value=serde_json::to_value(a).unwrap();value["features"]=json!(a.allowed_features());value["locationStatus"]=self.locations.view(a.id,&a.location);value["proxyStatus"]=inner.proxy_changes.get(&a.id).map(|c|c.view()).unwrap_or_else(||json!({"state":"applied"}));value["active"]=Self::active_count(&inner,Some(a.id),None).into();value["queued"]=Self::queued_count(&inner,Some(a.id),None).into();value["health"]=runtime::health_view(&inner,a);value["quota"]=super::quota::view(&inner,a);value["capabilities"]=runtime::catalog_view(&inner,a.id);value}).collect::<Vec<_>>()})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_account_cleanup_keeps_the_deletion_pending_for_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let ops = Operations::open(dir.path()).unwrap();
+        let id = Uuid::new_v4();
+        ops.register_accounts(&[(id, "deleting".into())]).unwrap();
+        let revision = ops.snapshot()["revision"].as_u64().unwrap();
+        ops.begin_account_delete(id, revision).unwrap();
+        let revision = ops.snapshot()["revision"].as_u64().unwrap();
+        {
+            let inner = ops.inner.lock().unwrap();
+            inner.db.execute(
+                "INSERT INTO response_affinities VALUES ('owner','group','model','fingerprint',?1,'{}',1)",
+                [id.to_string()],
+            ).unwrap();
+            inner.db.execute_batch("CREATE TRIGGER reject_affinity_delete BEFORE DELETE ON response_affinities BEGIN SELECT RAISE(ABORT, 'fixture'); END;")
+                .unwrap();
+        }
+        assert_eq!(
+            ops.finish_account_delete(id).unwrap_err().code,
+            "OPERATIONS_STORAGE"
+        );
+        assert_eq!(ops.pending_account_deletions(), vec![id]);
+        assert_eq!(ops.snapshot()["revision"], revision);
+        drop(ops);
+        let reopened = Operations::open(dir.path()).unwrap();
+        assert_eq!(reopened.pending_account_deletions(), vec![id]);
+        assert_eq!(reopened.snapshot()["revision"], revision);
+        reopened
+            .inner
+            .lock()
+            .unwrap()
+            .db
+            .execute_batch("DROP TRIGGER reject_affinity_delete;")
+            .unwrap();
+        reopened.finish_account_delete(id).unwrap();
+        assert!(reopened.pending_account_deletions().is_empty());
+        assert!(
+            reopened.snapshot()["accounts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let count: i64 = reopened
+            .inner
+            .lock()
+            .unwrap()
+            .db
+            .query_row("SELECT COUNT(*) FROM response_affinities", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

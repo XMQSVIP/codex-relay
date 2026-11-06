@@ -6,7 +6,7 @@ use serde_json::Value;
 #[derive(Default)]
 pub struct TextSse {
     events: TextEvents,
-    buffer: Vec<u8>,
+    frames: crate::sse::Frames,
     bytes: usize,
     completion: Option<String>,
     closed: bool,
@@ -43,34 +43,13 @@ impl TextSse {
         if self.bytes > 64 * 1024 * 1024 {
             return Err(Error::new("GUARD_SIZE", "响应超限。"));
         }
-        self.buffer.extend_from_slice(chunk);
         let mut output = Vec::new();
-        loop {
-            let found = self
-                .buffer
-                .windows(2)
-                .position(|w| w == b"\n\n")
-                .map(|i| (i, 2));
-            let crlf = self
-                .buffer
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .map(|i| (i, 4));
-            let found = match (found, crlf) {
-                (Some(a), Some(b)) => Some(if a.0 < b.0 { a } else { b }),
-                (a, b) => a.or(b),
-            };
-            let Some((position, separator)) = found else {
-                break;
-            };
-            if position > 1024 * 1024 {
-                return Err(Error::new("GUARD_SIZE", "SSE 事件超限。"));
-            }
-            let raw = self
-                .buffer
-                .drain(..position + separator)
-                .collect::<Vec<_>>();
-            let frame = std::str::from_utf8(&raw[..position])
+        let frames = self
+            .frames
+            .push(chunk, 1024 * 1024)
+            .map_err(|_| Error::new("GUARD_SIZE", "SSE 事件超限。"))?;
+        for raw in frames {
+            let frame = std::str::from_utf8(&raw)
                 .map_err(|_| Error::new("GUARD_SSE", "SSE UTF-8 无效。"))?;
             let mut data = Vec::new();
             let mut name = None;
@@ -110,13 +89,10 @@ impl TextSse {
                 }
             }
         }
-        if self.buffer.len() > 1024 * 1024 {
-            return Err(Error::new("GUARD_SIZE", "SSE 缓冲超限。"));
-        }
         Ok(output)
     }
     pub fn finish(&mut self) -> Result<Vec<String>> {
-        if self.closed || !self.buffer.iter().all(u8::is_ascii_whitespace) {
+        if self.closed || !self.frames.pending_is_whitespace() {
             self.closed = true;
             return Err(Error::new("GUARD_TRUNCATED", "SSE 未完整结束。"));
         }

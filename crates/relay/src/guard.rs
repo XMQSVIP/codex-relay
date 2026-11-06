@@ -319,7 +319,7 @@ async fn handle(
         if !headers
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|s| s.starts_with("application/json"))
+            .is_some_and(|s| crate::http_media::is_type(s, "application/json"))
             || headers.contains_key("content-encoding")
         {
             return Err(Error::new("GUARD_REQUEST", "仅支持未压缩 JSON。"));
@@ -392,7 +392,7 @@ async fn handle(
                     .headers()
                     .get("content-type")
                     .and_then(|v| v.to_str().ok())
-                    .is_some_and(|s| s.starts_with("text/event-stream"))
+                    .is_some_and(|s| crate::http_media::is_type(s, "text/event-stream"))
             {
                 return Err(Error::new(
                     if [401, 403].contains(&response.status().as_u16()) {

@@ -31,10 +31,10 @@ impl Lease {
     }
     pub fn complete<T>(mut self, result: Result<T>) -> Result<T> {
         self.settle(
-            if result.is_ok() {
-                "succeeded"
-            } else {
-                "failed"
+            match &result {
+                Ok(_) => "succeeded",
+                Err(error) if crate::execution::cancelled(&error.code) => "cancelled",
+                Err(_) => "failed",
             },
             result.as_ref().err().map(|e| e.code.as_str()),
         )?;
@@ -54,6 +54,56 @@ impl Drop for Lease {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.settle("cancelled", Some("REQUEST_CANCELLED"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{error::Error, operations::Operations};
+
+    #[test]
+    fn explicit_completion_preserves_cancellation_status_and_releases_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let ops = Operations::open(dir.path()).unwrap();
+        ops.set_global(ops.snapshot()["revision"].as_u64().unwrap(), 1)
+            .unwrap();
+        for code in [
+            "REQUEST_CANCELLED",
+            "REQUEST_INTERRUPTED",
+            "STREAM_CANCELLED",
+            "STREAM_CONSUMER_CLOSED",
+            "SERVICE_SHUTDOWN",
+            "UPSTREAM_TIMEOUT",
+        ] {
+            let lease = ops.begin(None, None, "diagnostic", "cancel", true).unwrap();
+            let id = lease.id;
+            assert_eq!(
+                lease
+                    .complete::<()>(Err(Error::new(code, "fixture")))
+                    .unwrap_err()
+                    .code,
+                code
+            );
+            assert_eq!(ops.snapshot()["active"], 0);
+            let inner = ops.inner.lock().unwrap();
+            let (status, error): (String, String) = inner
+                .db
+                .query_row(
+                    "SELECT status, error_code FROM requests WHERE id=?1",
+                    [id.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                status,
+                if code == "UPSTREAM_TIMEOUT" {
+                    "failed"
+                } else {
+                    "cancelled"
+                }
+            );
+            assert_eq!(error, code);
         }
     }
 }

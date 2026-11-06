@@ -167,7 +167,7 @@ pub(super) async fn start_account(
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<Value>> {
     let _setup = state.account_setup.lock().await;
-    let lease = state.account_lease(id, "management", "start").await?;
+    let lease = state.account_lease_now(id, "management", "start")?;
     lease.complete(state.profiles.start(id).await)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -243,17 +243,19 @@ pub(super) async fn login_account(
             require_oauth_profile(&state, id).await?;
             state.profiles.check_login_start(id, &input.kind).await?;
             state.operations.require_account_idle(id)?;
-            state.operations.cancel_proxy_restart(id);
-            if let Some((_, cancel)) = state.account_stops.lock().unwrap().remove(&id) {
-                cancel.cancel();
-            }
-            state.operations.invalidate_credentials(id)?;
             let lease = state
                 .operations
                 .begin_account_maintenance(id, "management", "login")?;
-            Ok(Json(
-                lease.complete(state.profiles.login(id, &input.kind).await)?,
-            ))
+            let result = async {
+                lease.invalidate_credentials()?;
+                state.operations.cancel_proxy_restart(id);
+                if let Some((_, cancel)) = state.account_stops.lock().unwrap().remove(&id) {
+                    cancel.cancel();
+                }
+                state.profiles.login(id, &input.kind).await
+            }
+            .await;
+            Ok(Json(lease.complete(result)?))
         }
         .await;
         let _ = tx.send(result);
@@ -356,7 +358,7 @@ pub(super) async fn import_token(
         let document = crate::oauth::prepare_import(&document, &state.operations.account_proxy(id))
             .await?
             .native_document();
-        lease.invalidate_import_credentials()?;
+        lease.invalidate_credentials()?;
         state.profiles.import_credentials(id, document).await
     }
     .await;
@@ -369,11 +371,13 @@ pub(super) async fn link_desktop_credentials(
     let _setup = state.account_setup.lock().await;
     require_oauth_profile(&state, id).await?;
     state.profiles.require_no_login(id)?;
-    state.operations.invalidate_credentials(id)?;
-    let lease = state
-        .account_lease(id, "management", "link_desktop_credentials")
-        .await?;
-    Ok(Json(lease.complete(state.profiles.link_desktop(id).await)?))
+    let lease = state.account_lease_now(id, "management", "link_desktop_credentials")?;
+    let result = async {
+        lease.invalidate_credentials()?;
+        state.profiles.link_desktop(id).await
+    }
+    .await;
+    Ok(Json(lease.complete(result)?))
 }
 pub(super) async fn logout_credentials(
     State(state): State<Arc<AdminState>>,
@@ -399,6 +403,106 @@ async fn require_oauth_profile(state: &AdminState, id: uuid::Uuid) -> Result<()>
 mod tests {
     use super::*;
     use futures_util::FutureExt;
+
+    #[tokio::test]
+    async fn rejected_login_and_desktop_link_preserve_the_existing_route() {
+        let directory = tempfile::tempdir().unwrap();
+        let state =
+            AdminState::new_with_network(4317, directory.path().join("accounts"), None, vec![])
+                .await
+                .unwrap();
+        let busy = state.profiles.create("busy account").await.unwrap();
+        let target = state.profiles.create("configured account").await.unwrap();
+        state
+            .operations
+            .register_accounts(&[(busy.id, busy.name), (target.id, target.name)])
+            .unwrap();
+        let revision = || state.operations.snapshot()["revision"].as_u64().unwrap();
+        let provider = serde_json::from_value(json!({"id":"fixture","model":"test-model","baseUrl":"http://127.0.0.1:9/v1","auth":"none","forwardHeaders":[],"requiredHeaders":[],"mcpServers":[]})).unwrap();
+        state
+            .operations
+            .set_inference_route(target.id, revision(), Some(provider))
+            .unwrap();
+        state.operations.set_global(revision(), 1).unwrap();
+        let active = state
+            .operations
+            .begin(Some(busy.id), None, "inference", "busy fixture", true)
+            .unwrap();
+        let original = state.operations.configured_provider(target.id);
+        let original_revision = revision();
+        assert_eq!(
+            link_desktop_credentials(State(state.clone()), Path(target.id))
+                .await
+                .unwrap_err()
+                .code,
+            "CONCURRENCY_LIMIT"
+        );
+        assert_eq!(state.operations.configured_provider(target.id), original);
+        assert_eq!(revision(), original_revision);
+        assert_eq!(
+            login_account(
+                State(state.clone()),
+                Path(target.id),
+                Json(Login {
+                    kind: "chatgptDeviceCode".into()
+                })
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "CONCURRENCY_LIMIT"
+        );
+        assert_eq!(state.operations.configured_provider(target.id), original);
+        assert_eq!(revision(), original_revision);
+        drop(active);
+        assert_eq!(state.operations.snapshot()["active"], 0);
+        assert_eq!(state.operations.snapshot()["queued"], 0);
+    }
+
+    #[tokio::test]
+    async fn saturated_start_does_not_hold_setup_and_block_account_stop() {
+        for same_account in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let state =
+                AdminState::new_with_network(4317, directory.path().join("accounts"), None, vec![])
+                    .await
+                    .unwrap();
+            let busy = state.profiles.create("busy account").await.unwrap();
+            let starting = state.profiles.create("starting account").await.unwrap();
+            state
+                .operations
+                .register_accounts(&[(busy.id, busy.name), (starting.id, starting.name)])
+                .unwrap();
+            let revision = || state.operations.snapshot()["revision"].as_u64().unwrap();
+            state.operations.set_global(revision(), 1).unwrap();
+            state.operations.set_queue(revision(), 64, 300).unwrap();
+            let active = state
+                .operations
+                .begin(Some(busy.id), None, "inference", "busy fixture", true)
+                .unwrap();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let registration = state
+                .profiles
+                .register_inference(busy.id, cancel.clone())
+                .unwrap();
+            let target = if same_account { busy.id } else { starting.id };
+            let result = start_account(State(state.clone()), Path(target))
+                .now_or_never()
+                .expect("maintenance must not wait for capacity while holding the setup lock");
+            assert_eq!(result.unwrap_err().code, "CONCURRENCY_LIMIT");
+            assert_eq!(state.operations.snapshot()["queued"], 0);
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                stop_account(State(state.clone()), Path(busy.id)),
+            )
+            .await
+            .expect("account stop must remain available")
+            .unwrap();
+            assert!(cancel.is_cancelled());
+            drop((active, registration));
+            assert_eq!(state.operations.snapshot()["active"], 0);
+        }
+    }
 
     #[tokio::test]
     async fn start_waiting_for_setup_does_not_block_the_setup_owners_account_lease() {

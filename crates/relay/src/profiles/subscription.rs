@@ -62,7 +62,7 @@ impl Profiles {
             let (provider, credential) = self
                 .read_route(id, &backend, directory.path(), Some(&expected.model))
                 .await?;
-            if &provider != expected {
+            if !provider.same_route(expected) {
                 self.invalidate_subscription(id);
                 return Err(Error::new(
                     "ROUTE_CHANGED",
@@ -113,7 +113,7 @@ impl Profiles {
             let (current, current_credential) = self
                 .read_route(id, &backend, directory.path(), Some(&expected.model))
                 .await?;
-            if current != provider
+            if !current.same_route(&provider)
                 || current_credential
                     .as_ref()
                     .map(|c| oauth::fingerprint(&c.identity))

@@ -12,6 +12,7 @@ async fn cancellation_respects_the_native_turn_submission_boundary() {
     for (stage, disconnect) in ["history", "clock", "submitted"]
         .into_iter()
         .flat_map(|stage| [false, true].map(|disconnect| (stage, disconnect)))
+        .flat_map(|case| vec![case; if case.0 == "submitted" { 32 } else { 1 }])
     {
         let (client, peer) = tokio::io::duplex(65536);
         let (read, write) = tokio::io::split(client);
@@ -102,7 +103,10 @@ async fn cancellation_respects_the_native_turn_submission_boundary() {
         };
         if stage == "submitted" {
             let summary = result.unwrap();
-            assert_eq!(summary.outcome, "cancelled");
+            assert_eq!(
+                summary.outcome, "cancelled",
+                "{stage}, disconnect={disconnect}"
+            );
             assert_eq!(summary.error_code.as_deref(), Some(expected));
             assert!(summary.cleanup_confirmed);
         } else {

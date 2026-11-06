@@ -131,7 +131,7 @@ pub async fn discover(rpc: &Rpc, provider: &Provider, installation: &str) -> Nat
 pub fn fingerprint(provider: &Provider) -> String {
     use sha2::{Digest, Sha256};
     hex::encode(Sha256::digest(
-        serde_json::to_vec(provider).unwrap_or_default(),
+        serde_json::to_vec(&provider.route_identity()).unwrap_or_default(),
     ))
 }
 
@@ -342,7 +342,10 @@ impl Operations {
     ) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         if !inner.settings.accounts.iter().any(|a| {
-            a.id == account && !a.deleting && a.enabled && a.route.as_ref() == Some(provider)
+            a.id == account
+                && !a.deleting
+                && a.enabled
+                && a.route.as_ref().is_some_and(|p| p.same_route(provider))
         }) {
             return Err(Error::new(
                 "ROUTE_CHANGED",

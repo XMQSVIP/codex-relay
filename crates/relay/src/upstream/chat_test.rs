@@ -56,6 +56,7 @@ pub(crate) async fn run(
         None,
         &access,
         &connections,
+        || Ok(()),
     )
     .await?;
     if !transfer.status.is_success() {
@@ -65,7 +66,7 @@ pub(crate) async fn run(
         .headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|s| s.starts_with("text/event-stream"))
+        .is_some_and(|s| crate::http_media::is_type(s, "text/event-stream"))
     {
         return Err(Error::new(
             "UPSTREAM_INVALID_RESPONSE",

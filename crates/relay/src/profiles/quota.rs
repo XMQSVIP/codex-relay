@@ -71,7 +71,7 @@ impl Profiles {
             let (provider, credential) = self
                 .read_route(id, &backend, dir.path(), Some(&expected.model))
                 .await?;
-            if &provider != expected {
+            if !provider.same_route(expected) {
                 return Err(Error::new(
                     "ROUTE_CHANGED",
                     "账户身份或配置已变化，请重新启用账户。",

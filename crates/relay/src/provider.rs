@@ -35,7 +35,48 @@ pub struct Provider {
     pub mcp_servers: Vec<String>,
 }
 
+#[derive(PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RouteIdentity<'a> {
+    #[serde(skip_serializing_if = "Execution::is_native")]
+    execution: Execution,
+    id: &'a str,
+    base_url: &'a str,
+    auth: &'a str,
+    forward_headers: &'a [String],
+    required_headers: &'a [String],
+    mcp_servers: &'a [String],
+}
+
 impl Provider {
+    pub(crate) fn route_identity(&self) -> RouteIdentity<'_> {
+        // Every inference request selects its model explicitly. The native
+        // default is metadata, not part of the account/transport boundary.
+        let Self {
+            execution,
+            id,
+            model: _,
+            base_url,
+            auth,
+            forward_headers,
+            required_headers,
+            mcp_servers,
+        } = self;
+        RouteIdentity {
+            execution: *execution,
+            id,
+            base_url,
+            auth,
+            forward_headers,
+            required_headers,
+            mcp_servers,
+        }
+    }
+
+    pub(crate) fn same_route(&self, other: &Self) -> bool {
+        self.route_identity() == other.route_identity()
+    }
+
     pub(crate) fn is_chatgpt_account(&self) -> bool {
         self.execution == Execution::Native
             && (self.auth == "chatgpt"
