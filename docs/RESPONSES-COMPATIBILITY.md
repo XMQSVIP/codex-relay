@@ -85,7 +85,9 @@ curl "$BRIDGE_BASE_URL/responses" \
 
 `POST /v1/responses/compact` 返回 `response.compaction` 对象；普通 Responses 的 JSON/SSE 及 WebSocket `compaction_trigger` 返回 Responses 事件。加密条目沿用原有 Key、分组、模型、账户及路由代次绑定。普通生成与内部自动压缩仍由官方 app-server 执行。导出配置启用 `capabilities.remote_compaction = "v2"`；API Key 直连 compact 保持原行为。
 
-模型失败返回 response.failed 或入口 error；原生条目标记 incomplete 时保留 response.incomplete。用量来自原生事件，不根据文本估算。当前原生 raw completion RPC 不暴露全部上游 incomplete_details，所以不能恢复其未提供的终态原因；原生错误会明确作为失败返回。
+原生 function 调用适配为 custom 或工具搜索调用时，输出使用对应类型的 `ctc_` 或 `tsc_` 条目 ID，所有相关事件保持同一 ID；配对工具结果的 `call_id` 不变。显式压缩会省略这两种调用中误带的 `fc_` 可选条目 ID，使已有完整历史仍可提交；工具内容、调用配对、正确类型的 ID 和加密字段保持原值。
+
+模型失败返回 response.failed 或入口 error；原生条目标记 incomplete 时保留 response.incomplete。WebSocket 的入口及执行错误带有 HTTP 语义的数值 `status`，使官方客户端及时结束失败的压缩请求；上游拒绝沿用中转站的错误映射，不回显上游原文。用量来自原生事件，不根据文本估算。当前原生 raw completion RPC 不暴露全部上游 incomplete_details，所以不能恢复其未提供的终态原因；原生错误会明确作为失败返回。
 
 `NATIVE_TOOL_SCOPE` 表示本轮返回的工具不符合调用方工具目录或工具策略，并不表示网络连接故障。JSON、SSE 和 WebSocket 保留具体校验原因及有长度限制的工具 name/namespace，不回显参数或代码。模型沿用提示词里的原始 function/custom 名称时，适配器允许精确匹配本轮已声明的工具；原生别名映射优先，RPC 回调仍只允许实际注册的原生身份。未声明工具、错误命名空间及 `tool_choice=none` 继续拒绝。该映射和失败诊断由原版 app-server 与模拟模型测试覆盖，实际桌面操作仍需现场验证。
 

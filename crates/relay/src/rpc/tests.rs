@@ -666,6 +666,49 @@ async fn correlates_out_of_order_responses_and_redacts_errors() {
 }
 
 #[tokio::test]
+async fn remote_errors_keep_method_code_and_safe_reason_without_replay() {
+    let (rpc, mut messages) = Rpc::new();
+    for (native_code, message, expected_code, reason) in [
+        (
+            -32600,
+            "dynamic tool input schema is not supported for secret: private prompt",
+            "RPC_REMOTE",
+            "inputSchema",
+        ),
+        (
+            -32600,
+            "dynamic tool namespace collides with a reserved Responses API namespace: secret",
+            "RPC_REMOTE",
+            "保留命名空间冲突",
+        ),
+        (-32602, "private prompt", "RPC_REMOTE", "请求参数无效"),
+        (-32603, "private internal error", "RPC_REMOTE", "内部错误"),
+        (
+            -32601,
+            "private unsupported method",
+            "RPC_METHOD_UNSUPPORTED",
+            "不支持此接口",
+        ),
+    ] {
+        let request_rpc = rpc.clone();
+        let task =
+            tokio::spawn(async move { request_rpc.request("thread/start", json!({})).await });
+        let sent = messages.recv().await.unwrap();
+        rpc.receive(&json!({"id":sent["id"],"error":{"code":native_code,"message":message,"data":{"token":"secret"}}}).to_string()).unwrap();
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(error.code, expected_code);
+        assert!(error.message.contains("thread/start"));
+        assert!(error.message.contains(&native_code.to_string()));
+        assert!(error.message.contains(reason), "{}", error.message);
+        assert!(!error.message.contains("private"));
+        assert!(!error.message.contains("secret"));
+        assert!(rpc.inner.pending.lock().unwrap().is_empty());
+        assert!(messages.try_recv().is_err());
+        assert!(!rpc.is_closed());
+    }
+}
+
+#[tokio::test]
 async fn cancellation_timeout_and_disconnect_release_slots_without_replay() {
     let (rpc, mut messages) = Rpc::new();
     let task_rpc = rpc.clone();

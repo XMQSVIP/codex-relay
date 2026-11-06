@@ -35,6 +35,43 @@ fn additional_tools_keep_position_schemas_and_register_callbacks() {
 }
 
 #[test]
+fn namespace_registration_bounds_descriptions_by_characters_without_losing_public_text() {
+    for character in ['a', '界', '🌍'] {
+        for length in [0, 1024, 1025, 1085] {
+            let description: String = std::iter::repeat_n(character, length).collect();
+            let function_description = "Full function instructions.".repeat(80);
+            let definition = json!({"type":"namespace","name":"notes","description":description,
+                "tools":[{"type":"function","name":"read_file","description":function_description,
+                    "parameters":{"type":"object","properties":{"path":{"type":"string"}}}}]});
+            for embedded in [false, true] {
+                let mut body = json!({"model":"m","input":"hello"});
+                if embedded {
+                    body["input"] = json!([additional(json!([definition]))]);
+                } else {
+                    body["tools"] = json!([definition]);
+                }
+                let request = Request::parse(body).unwrap();
+                let native = request.dynamic_tools();
+                assert_eq!(
+                    native[0]["description"],
+                    description.chars().take(1024).collect::<String>()
+                );
+                assert_eq!(request.tools[0]["description"], description);
+                if embedded {
+                    assert_eq!(request.input[0]["tools"][0]["description"], description);
+                }
+                assert_eq!(native[0]["tools"][0]["description"], function_description);
+                assert_eq!(
+                    native[0]["tools"][0]["inputSchema"],
+                    definition["tools"][0]["parameters"]
+                );
+                assert!(request.has_scoped_tool(Some("notes"), "read_file"));
+            }
+        }
+    }
+}
+
+#[test]
 fn incremental_namespaces_merge_and_latest_definition_wins() {
     let update = json!({"type":"function","name":"echo","parameters":{"type":"object","properties":{"updated":{"type":"boolean"}}}});
     let request = Request::parse(json!({"model":"m","tools":[function("root")],"input":[

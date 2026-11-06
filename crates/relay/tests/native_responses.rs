@@ -402,6 +402,60 @@ async fn responses_preserve_native_transport_and_stateless_tool_history() {
         one(&backend, &provider, &cwd, &disabled).await["status"],
         "completed"
     );
+    // Verify full descriptions in the actual model payload, not merely accepted
+    // thread/inject_items RPCs. Only the callback registration may be shortened.
+    let full_description = format!("{}NAMESPACE_DESCRIPTION_TAIL", "🌍".repeat(1024));
+    let long_tools = json!([{"type":"namespace","name":"functions","description":full_description,
+        "tools":[{"type":"custom","name":"exec","description":"Synthetic client-only tool"}]}]);
+    for embedded in [false, true] {
+        for disabled in [false, true] {
+            let mut history = vec![json!({"role":"user","content":"HISTORY_POSITION_MARKER"})];
+            if embedded {
+                history
+                    .push(json!({"type":"additional_tools","role":"developer","tools":long_tools}));
+            }
+            history.push(json!({"role":"user","content":"Reply without tools"}));
+            let request = responses::Request::parse(json!({"model":"gpt-6.1-sol","input":history,
+                "tools":if embedded {json!([])} else {long_tools.clone()},
+                "tool_choice":if disabled {"none"} else {"auto"}}))
+            .unwrap();
+            assert_eq!(
+                one(&backend, &provider, &cwd, &request).await["status"],
+                "completed"
+            );
+            let captured = fixture.results.lock().unwrap().last().unwrap().clone();
+            assert_eq!(
+                captured
+                    .to_string()
+                    .matches("NAMESPACE_DESCRIPTION_TAIL")
+                    .count(),
+                usize::from(!disabled)
+            );
+            if !disabled {
+                let input = captured["input"].as_array().unwrap();
+                let marker = input
+                    .iter()
+                    .position(|item| item["content"][0]["text"] == "HISTORY_POSITION_MARKER")
+                    .unwrap();
+                let supplement = input
+                    .iter()
+                    .position(|item| {
+                        item["type"] == "additional_tools"
+                            && item["tools"][0]["description"] == full_description
+                    })
+                    .expect("full model-visible description");
+                assert_eq!(
+                    supplement > marker,
+                    embedded,
+                    "embedded descriptions must not move"
+                );
+                assert_eq!(
+                    input[supplement]["tools"][0]["name"],
+                    request.dynamic_tools()[0]["name"]
+                );
+            }
+        }
+    }
     backend.stop().await.unwrap();
     if with_catalog {
         let version = installation
@@ -437,8 +491,8 @@ async fn responses_preserve_native_transport_and_stateless_tool_history() {
         );
     }
     server.abort();
-    assert_eq!(fixture.count.load(Ordering::SeqCst), 18);
-    assert_eq!(fixture.verified.load(Ordering::SeqCst), 18);
+    assert_eq!(fixture.count.load(Ordering::SeqCst), 22);
+    assert_eq!(fixture.verified.load(Ordering::SeqCst), 22);
     let seen = fixture.results.lock().unwrap();
     fn tool_names(tools: &[Value]) -> Vec<String> {
         tools

@@ -54,11 +54,7 @@ impl Rpc {
             .unwrap_or_else(|| id.to_string());
         if let Some(sender) = self.inner.pending.lock().unwrap().remove(&key) {
             let result = if message.get("error").is_some() {
-                Err(if message["error"]["code"] == -32601 {
-                    Error::new("RPC_METHOD_UNSUPPORTED", "原生后端不支持此接口。")
-                } else {
-                    Error::new("RPC_REMOTE", "原生后端拒绝了请求。")
-                })
+                Err(super::remote_error::from_value(&message["error"]))
             } else {
                 Ok(message["result"].clone())
             };

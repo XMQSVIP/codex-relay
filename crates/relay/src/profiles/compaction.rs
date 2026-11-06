@@ -100,6 +100,18 @@ fn payload(request: &Request, history: &[Value]) -> Value {
         body["tools"] = json!([]);
     }
     let mut input = history.to_vec();
+    for item in &mut input {
+        if matches!(
+            item["type"].as_str(),
+            Some("custom_tool_call" | "tool_search_call")
+        ) && item["id"].as_str().is_some_and(|id| id.starts_with("fc_"))
+        {
+            // Earlier translated calls retained the native function ID. These
+            // optional item IDs are invalid for the translated wire type. Keep
+            // call_id and all opaque fields so existing chats can still compact.
+            item.as_object_mut().unwrap().remove("id");
+        }
+    }
     if input
         .last()
         .is_none_or(|item| item["type"] != "compaction_trigger")
@@ -372,6 +384,31 @@ mod tests {
         );
         assert_eq!(summary.outcome, "completed");
     }
+    #[test]
+    fn compaction_omits_only_function_ids_on_previously_translated_calls() {
+        let request = Request::parse(json!({"model":"m","input":"test"})).unwrap();
+        let history = vec![
+            json!({"type":"custom_tool_call","id":"fc_old","call_id":"call_old",
+                "name":"exec","input":"code","encrypted_content":"opaque",
+                "internal_chat_message_metadata_passthrough":{"turn_id":"original"}}),
+            json!({"type":"custom_tool_call_output","id":"ctco_old","call_id":"call_old","output":"result"}),
+            json!({"type":"custom_tool_call","id":"ctc_valid","call_id":"call_valid","name":"exec","input":"code"}),
+            json!({"type":"tool_search_call","id":"fc_search","execution":"client","call_id":"call_search","arguments":{}}),
+            json!({"type":"tool_search_call","id":"tsc_valid","execution":"client","call_id":"call_search_valid","arguments":{}}),
+            json!({"type":"function_call","id":"fc_valid","call_id":"call_function","name":"echo","arguments":"{}"}),
+            json!({"type":"compaction","id":"cmp_valid","encrypted_content":"opaque_compaction"}),
+        ];
+        let original = history.clone();
+        let body = payload(&request, &history);
+        let mut expected = original.clone();
+        for index in [0, 3] {
+            expected[index].as_object_mut().unwrap().remove("id");
+        }
+        expected.push(json!({"type":"compaction_trigger"}));
+        assert_eq!(body["input"], json!(expected));
+        assert_eq!(history, original);
+    }
+
     #[test]
     fn payload_keeps_history_and_options_without_duplicate_trigger_or_local_identity() {
         let request = Request::parse(json!({"model":"m","input":[{"role":"user","content":"secret"},{"type":"compaction_trigger"}],"thread_id":"local","prompt_cache_key":"routing", "store":true,"parallel_tool_calls":false,"tools":[{"type":"function","name":"f","parameters":{"type":"object"},"strict":true}]})).unwrap();

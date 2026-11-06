@@ -10,6 +10,7 @@ Responses 原生工作进程使用派生的模型目录，将模型自带的 `to
 
 | 场景 | 当前处理与排查方向 |
 | --- | --- |
+| 顶层工具或聊天分支历史携带超过 1024 字符的工具命名空间描述 | 原生 `dynamicTools` 注册副本按 Unicode 字符截取前 1024 字符，避免 `thread/start` 拒绝；模型仍收到完整描述。历史声明保留原位置及版本；仅顶层提供的超长命名空间，在新建线程时补充完整 `additional_tools`，续聊不重复补充，`tool_choice=none` 不补充。工具名称、参数 Schema 和回调身份不变，不裁剪成员函数说明。完整目录参与缓存匹配，描述尾部变化或移除工具均不能复用旧目录线程；补充项纳入原有容量及 RPC 帧大小检查。 |
 | 声明 `web_search` 后原生模型调用 `web.run` | 该调用由官方程序执行，不是客户端函数。中转站等待 `webSearch` 完成通知和对应原生工具结果，再输出标准 `web_search_call`，保留搜索动作、来源 URL 和回答中的引用；不把内部函数调用或结果交给客户端执行。未声明搜索或 `tool_choice=none` 时仍拒绝。 |
 | 声明 `image_generation` 后原生模型调用 `image_gen.imagegen` | 等待 `imageGeneration` 成功事件和对应工具结果，再输出标准 `image_generation_call`；校验内联图片、保留 revised_prompt，不读取或返回原生 `savedPath`。生图失败、结果缺失或非法图片均不算成功。 |
 | 服务端工具和客户端函数同时调用 | 等服务端工具完成后才交付客户端函数调用；搜索或生图期间不启动客户端回调的 5 秒等待计时，避免提前截断仍在执行的服务端工具。 |
@@ -36,7 +37,8 @@ Responses 原生工作进程使用派生的模型目录，将模型自带的 `to
 - `converted_tool_history_drops_typed_item_ids_but_preserves_call_links`：覆盖带 ID 的 custom 调用、进度通知、媒体结果、client tool_search 调用与结果，验证仅移除改变类型的条目 ID，保留原始历史、call_id、内容和未转换条目的 ID。SDK 模拟上游对 function 调用及结果的 ID 前缀执行 HTTP 400 拒绝，JSON/SSE/WS 续接携带真实形式的 `ctco_` 结果 ID，工具搜索历史另行覆盖 JSON/SSE。
 - `gateway_evolution`：具体错误原因、清理错误优先级、诊断内容不进入序列化统计摘要。
 - `scripts/test_responses_sdk.py`：Python/JavaScript SDK、JSON/SSE/WS、原始名称、结果续接、错误参数恢复、失败后同连接继续；并保留双官方程序、图片、notify、并行工具、压缩、中断和撤权回归。
-- `native_responses`：隔离合成凭据与模拟模型，校验模型连接进程归属，覆盖命名空间、MCP、custom、工具搜索和客户端执行边界。
+- `namespace_supplements_are_injected_once_per_native_thread` 与 `namespace_description_tails_participate_in_reuse_and_resource_accounting`：检查完整描述只在新线程补充、禁用工具不补充、续聊增量计量，以及描述尾部变更或工具移除后的缓存隔离。
+- `native_responses`：隔离合成凭据与模拟模型，校验模型连接进程归属，覆盖命名空间、MCP、custom、工具搜索和客户端执行边界；检查顶层及历史中超长命名空间的完整描述确实到达上游请求，并保留历史位置。
 - `responses::execute::tests`：以完整 RPC 流程复现并验证终态后的工具缺失、空输出、不完整工具/推理、JSON 最终校验失败及最终交付超时；断言中断次数、失败/不完整事件、用量、清理确认及无残留工具等待。`responses::continuation::tests` 另覆盖中断被拒绝与完成通知的不同顺序、通知积压、工具等待清理时保留已读及排队中的终态，以及跨线程、轮次的终态隔离。
 - `native_web_search`：通过官方 app-server 和本地模拟搜索、生图验证 `web.run` / `image_gen.imagegen` 的执行、内联图片、来源与引用、用量合计、与客户端工具并行时等待结果、失败不重试，以及取消清理后继续使用进程。设置 `BRIDGE_NATIVE_INSTALLATION` 后运行 `node scripts/cargo-with-memory.mjs test --locked --test native_web_search -- --ignored`，不消耗真实模型、搜索或生图用量。
 - `scripts/test_native_tools_relay.py`：独立图片和搜索接口的隔离 HTTP 回归，检查搜索设置的实际上游参数、逐次模型用量合计、部分搜索失败不得返回成功，以及撤销 Key 后的清理。可用 `--installation <安装配置>` 指定本机官方程序，`--relay-binary <程序路径>` 指定待测中转站。

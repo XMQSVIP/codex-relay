@@ -38,7 +38,6 @@ jobs:
             target: aarch64-unknown-linux-musl
             rustflags: ''
     env:
-      CARGO_BUILD_JOBS: '1'
       CARGO_TERM_COLOR: always
       RUSTFLAGS: ${{ matrix.rustflags }}
       PYTHONUTF8: '1'
@@ -112,7 +111,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          node scripts/cargo-with-memory.mjs build --release --locked -j1
+          node scripts/cargo-with-memory.mjs build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
           python scripts/package_portable.py
           if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
@@ -131,7 +130,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          node scripts/cargo-with-memory.mjs build --release --locked -j1
+          node scripts/cargo-with-memory.mjs build --release --locked
           # Local ad-hoc signature; no Developer ID required.
           /usr/bin/codesign --force --sign - target/release/codex-relay
           python scripts/package_macos.py --skip-build --no-reveal

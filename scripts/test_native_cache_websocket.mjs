@@ -131,6 +131,12 @@ try {
       { role: 'user', content: 'SYNTHETIC_NO_DISK_COMPACT' }, { type: 'compaction_trigger' },
     ] });
     assert.equal(result.output[0].encrypted_content, 'SYNTHETIC_DIRECT_CIPHER');
+    const recovered = await create({ tools: [], input: [
+      { type: 'custom_tool_call', id: 'fc_legacy_ws', call_id: 'legacy_ws', name: 'exec', input: 'synthetic' },
+      { type: 'custom_tool_call_output', id: 'ctco_legacy_ws', call_id: 'legacy_ws', output: 'client result' },
+      { type: 'compaction_trigger' },
+    ] });
+    assert.equal(recovered.output[0].encrypted_content, 'SYNTHETIC_DIRECT_CIPHER');
     const continued = await create({ tools: [], previous_response_id: result.id, input: [
       { role: 'user', content: 'SYNTHETIC_NO_DISK_COMPACT_SECOND' }, { type: 'compaction_trigger' },
     ] });

@@ -146,6 +146,9 @@ fn lane_id(frame: &Value) -> Result<LaneId> {
     }
 }
 pub(super) fn error_event(error: Error) -> Value {
+    // The official client only treats an error frame as terminal when it has
+    // an HTTP-style status. Without it, remote compaction waits for idle timeout.
+    let status = crate::client_api::client_error_payload(&error).0.as_u16();
     let code = if error.code == "RESPONSE_NOT_FOUND" {
         "previous_response_not_found"
     } else {
@@ -165,7 +168,7 @@ pub(super) fn error_event(error: Error) -> Value {
         }
         _ => "invalid_request_error",
     };
-    json!({"type":"error","code":code,"message":error.message,"error":{"type":kind,"code":code,"message":error.message,"param":null}})
+    json!({"type":"error","status":status,"code":code,"message":error.message,"error":{"type":kind,"code":code,"message":error.message,"param":null}})
 }
 async fn emit(tx: &mpsc::Sender<Signal>, lane: &LaneId, event: Value) -> Result<()> {
     let _ = DEBUG_CAPTURE.try_with(|capture| {
@@ -489,11 +492,12 @@ async fn execute_inner(
             }
         }
         if event["type"] == "error" && event["error"].is_null() {
-            event["error"] = error_event(Error::new(
+            let wire_error = error_event(Error::new(
                 event["code"].as_str().unwrap_or("UPSTREAM_REQUEST_FAILED"),
                 event["message"].as_str().unwrap_or("原生请求失败。"),
-            ))["error"]
-                .clone();
+            ));
+            event["status"] = wire_error["status"].clone();
+            event["error"] = wire_error["error"].clone();
         }
         emit(&tx, &lane, event).await?;
     }
@@ -741,5 +745,14 @@ mod tests {
             error_event(Error::new("RESPONSE_NOT_FOUND", "missing"))["error"]["code"],
             "previous_response_not_found"
         );
+        for (code, status) in [
+            ("INVALID_INPUT", 400),
+            ("RESPONSE_NOT_FOUND", 404),
+            ("UPSTREAM_REQUEST_REJECTED", 502),
+            ("UPSTREAM_RATE_LIMITED", 429),
+            ("UPSTREAM_TIMEOUT", 504),
+        ] {
+            assert_eq!(error_event(Error::new(code, "failed"))["status"], status);
+        }
     }
 }

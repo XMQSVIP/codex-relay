@@ -113,8 +113,8 @@ impl Rpc {
         self.inner.pending.lock().unwrap().remove(&id);
         match result {
             Ok(Ok(value)) => value.map_err(|mut error| {
-                if error.code == "RPC_REMOTE" {
-                    error.message = format!("原生后端拒绝了 {method} 请求。");
+                if matches!(error.code.as_str(), "RPC_REMOTE" | "RPC_METHOD_UNSUPPORTED") {
+                    error.message = format!("原生后端拒绝了 {method} 请求。{}", error.message);
                 }
                 error
             }),

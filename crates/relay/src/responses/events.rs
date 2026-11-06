@@ -396,6 +396,8 @@ impl Output {
                                 return Err(protocol());
                             }
                             let i = self.items.len();
+                            // A translated tool-search call needs its own typed ID.
+                            let id = format!("tsc_{}", uuid::Uuid::new_v4().simple());
                             let item = json!({"type":"tool_search_call","id":id,"call_id":call,"execution":"client","status":"completed","arguments":arguments});
                             self.bytes += args.len();
                             self.calls = true;
@@ -435,6 +437,14 @@ impl Output {
                                 "response.function_call_arguments.delta",
                                 "response.function_call_arguments.done",
                             )
+                        };
+                        // Function and custom item IDs have different wire prefixes.
+                        // Keep call_id for callbacks, but give the translated item
+                        // one ctc_ ID shared by its added/delta/done events.
+                        let id = if custom && !native_custom {
+                            format!("ctc_{}", uuid::Uuid::new_v4().simple())
+                        } else {
+                            id
                         };
                         let mut item = json!({"type":kind,"id":id,"call_id":call,"name":name,"status":"in_progress"});
                         item[field] = json!("");
@@ -1206,6 +1216,18 @@ mod tests {
         let completed = output.completed().unwrap();
         let item = &completed["response"]["output"][0];
         assert_eq!(item["type"], "custom_tool_call");
+        let wire_id = item["id"].as_str().unwrap();
+        assert!(wire_id.starts_with("ctc_"));
+        assert_ne!(item["id"], "fc");
+        for event in &events {
+            if event["type"] == "response.output_item.added"
+                || event["type"] == "response.output_item.done"
+            {
+                assert_eq!(event["item"]["id"], wire_id);
+            } else {
+                assert_eq!(event["item_id"], wire_id);
+            }
+        }
         assert_eq!(item["call_id"], "call");
         assert_eq!(item["input"], input);
         assert!(item.get("arguments").is_none());
@@ -1213,6 +1235,28 @@ mod tests {
         let mut malformed = event;
         malformed["params"]["item"]["arguments"] = json!("{}");
         assert!(Output::new(&request).consume(&malformed, &request).is_err());
+    }
+
+    #[test]
+    fn translated_tool_search_uses_a_typed_item_id_and_keeps_the_callback_id() {
+        let request = Request::parse(json!({"model":"m","input":"search",
+            "tools":[{"type":"tool_search","execution":"client"}]}))
+        .unwrap();
+        let raw = json!({"type":"function_call","id":"fc_search","call_id":"call_search",
+            "name":super::super::tool_catalog::SEARCH_NAME,"arguments":"{}"});
+        let mut output = Output::new(&request);
+        let events = output
+            .consume(
+                &json!({"method":"rawResponseItem/completed","params":{"item":raw}}),
+                &request,
+            )
+            .unwrap();
+        let response = output.completed().unwrap();
+        let item = &response["response"]["output"][0];
+        assert_eq!(item["type"], "tool_search_call");
+        assert!(item["id"].as_str().unwrap().starts_with("tsc_"));
+        assert_eq!(item["call_id"], "call_search");
+        assert!(events.iter().all(|event| event["item"]["id"] == item["id"]));
     }
 
     #[test]

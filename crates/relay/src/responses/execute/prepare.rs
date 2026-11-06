@@ -166,10 +166,11 @@ pub(super) async fn prepare_turn(
     if let Some(timing) = &mut timing {
         timing.mark("thread_start");
     }
-    let mut items = tool_catalog::native_history_with_catalog(
-        &history[offset.unwrap_or(0)..],
+    let mut items = tool_catalog::native_input(
+        history,
         request.tool_choice == "none",
         &request.tools,
+        offset,
     );
     items.extend(rpc.location_search_item(&request.tools, request.tool_choice == "none"));
     if resumed_waiting.is_none() {

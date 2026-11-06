@@ -146,19 +146,19 @@ pub(crate) fn reservation_bytes(
     let offset = session
         .map(|s| s.continuation(access, request, history))
         .transpose()?
-        .flatten()
-        .unwrap_or(0);
+        .flatten();
     if let Some(session) = session.filter(|s| !s.calls.is_empty()) {
-        let replies = continuation::replies(session, history, offset)
+        let replies = continuation::replies(session, history, offset.unwrap_or(0))
             .ok_or_else(|| invalid("工具结果与待答线程不匹配。"))?;
         return replies.iter().try_fold(0usize, |sum, (_, value)| {
             Ok(sum.saturating_add(serde_json::to_vec(value)?.len()))
         });
     }
-    let mut items = tool_catalog::native_history_with_catalog(
-        &history[offset..],
+    let mut items = tool_catalog::native_input(
+        history,
         request.tool_choice == "none",
         &request.tools,
+        offset,
     );
     if let Some(rpc) = rpc {
         items.extend(rpc.location_search_item(&request.tools, request.tool_choice == "none"));

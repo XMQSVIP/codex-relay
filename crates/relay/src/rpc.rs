@@ -170,6 +170,7 @@ mod dispatch;
 mod host_callbacks;
 mod matching;
 mod reclamation;
+mod remote_error;
 mod tool_callbacks;
 mod transport;
 

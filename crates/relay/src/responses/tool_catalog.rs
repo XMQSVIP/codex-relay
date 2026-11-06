@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 pub(super) const SEARCH_NAME: &str = "__relay_tool_search";
 const DEFERRED_NAMESPACE: &str = "relay_deferred";
+const NATIVE_NAMESPACE_DESCRIPTION_CHARS: usize = 1024;
 
 /// Diagnose identities without echoing tool arguments, code, or arbitrary model text.
 pub(super) fn scope_error(reason: &str, namespace: Option<&str>, name: &str) -> Error {
@@ -131,7 +132,80 @@ fn declarations(tools: &[Value], top_level: bool) -> Vec<Value> {
 pub(super) fn native(tools: &[Value]) -> Vec<Value> {
     let mut catalog = vec![];
     merge(&mut catalog, native_declarations(tools));
+    // app-server bounds namespace descriptions at registration. Keep the full
+    // descriptions in the caller catalog and injected history, where the model
+    // still needs them; only shorten the dynamic callback registration copy.
+    for tool in &mut catalog {
+        if tool["type"] == "namespace"
+            && let Some(description) = tool["description"].as_str()
+            && let Some((end, _)) = description
+                .char_indices()
+                .nth(NATIVE_NAMESPACE_DESCRIPTION_CHARS)
+        {
+            tool["description"] = json!(&description[..end]);
+        }
+    }
     crate::protocol_tools::native(&catalog)
+}
+
+/// Initial registration has a bounded description, but the model must see the
+/// complete caller contract. Only supplement namespaces absent from the full
+/// history; embedded declarations must retain their original position/version.
+/// Use the resolved catalog, not superseded top-level declarations, so this
+/// context is covered by the same complete settings digest as thread reuse.
+fn namespace_description_items(tools: &[Value], history: &[Value]) -> Vec<Value> {
+    let declared: std::collections::HashSet<&str> = history
+        .iter()
+        .filter(|item| {
+            matches!(
+                item["type"].as_str(),
+                Some("additional_tools" | "tool_search_output")
+            )
+        })
+        .filter_map(|item| item["tools"].as_array())
+        .flatten()
+        .filter(|tool| tool["type"] == "namespace")
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    tools
+        .iter()
+        .filter(|tool| {
+            tool["type"] == "namespace"
+                && !declared.contains(tool["name"].as_str().unwrap())
+                && tool["description"].as_str().is_some_and(|description| {
+                    description
+                        .chars()
+                        .nth(NATIVE_NAMESPACE_DESCRIPTION_CHARS)
+                        .is_some()
+                })
+        })
+        // Separate items let the existing injection batcher enforce frame bounds.
+        .map(|tool| {
+            json!({"type":"additional_tools","role":"developer",
+            "tools":native_declarations(std::slice::from_ref(tool))})
+        })
+        .collect()
+}
+
+/// Shared by execution and resource accounting. Supplements belong to the new
+/// native thread only, never to the client's append-only history ledger.
+pub(super) fn native_input(
+    history: &[Value],
+    disabled: bool,
+    tools: &[Value],
+    offset: Option<usize>,
+) -> Vec<Value> {
+    let mut items = if offset.is_none() && !disabled {
+        namespace_description_items(tools, history)
+    } else {
+        vec![]
+    };
+    items.extend(native_history_with_catalog(
+        &history[offset.unwrap_or(0)..],
+        disabled,
+        tools,
+    ));
+    items
 }
 
 pub(super) fn client_identity(
@@ -491,6 +565,91 @@ pub(super) fn native_history_with_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespace_supplements_preserve_full_text_without_replaying_or_reordering_history() {
+        for name in ["notes", "functions", "mcp__notes"] {
+            for length in [1024, 1025, 1085] {
+                let description = "🌍".repeat(length);
+                let tools = parse(&json!([{"type":"namespace","name":name,"description":description,
+                    "tools":[{"type":"custom","name":"read_file","description":"Full member instructions"}]}])).unwrap();
+                let history = vec![json!({"type":"message","role":"user","content":"first"})];
+                let initial = native_input(&history, false, &tools, None);
+                assert_eq!(initial.len(), history.len() + usize::from(length > 1024));
+                assert_eq!(initial.last(), history.last());
+                if length > 1024 {
+                    assert_eq!(initial[0]["tools"][0]["description"], description);
+                    assert_eq!(initial[0]["tools"][0]["name"], native(&tools)[0]["name"]);
+                    assert_eq!(initial[0]["tools"][0]["tools"][0]["type"], "function");
+                }
+                assert_eq!(native_input(&history, true, &tools, None), history);
+                assert_eq!(native_input(&history, false, &tools, Some(0)), history);
+                assert!(native_input(&history, false, &tools, Some(1)).is_empty());
+                for kind in ["additional_tools", "tool_search_output"] {
+                    let mut embedded = history.clone();
+                    embedded.push(json!({"type":kind,"tools":tools}));
+                    let native = native_input(&embedded, false, &tools, None);
+                    assert_eq!(native.len(), 2, "do not duplicate embedded declarations");
+                    assert_eq!(native[0], history[0]);
+                    assert_eq!(native[1]["tools"][0]["description"], description);
+                }
+            }
+        }
+        let top = parse(
+            &json!([{"type":"namespace","name":"notes","description":"OLD".repeat(500),
+            "tools":[{"type":"function","name":"read_file"}]}]),
+        )
+        .unwrap();
+        for description in ["NEW".repeat(500), String::new()] {
+            let history = vec![
+                json!({"type":"additional_tools","tools":[{"type":"namespace",
+                "name":"notes","description":description,"tools":[{"type":"function","name":"write_file"}]}]}),
+            ];
+            let effective = resolve(&top, &history).unwrap();
+            let input = native_input(&history, false, &effective, None);
+            assert_eq!(input.len(), 1);
+            assert_eq!(input[0]["tools"][0]["description"], description);
+            assert!(!serde_json::to_string(&input).unwrap().contains("OLD"));
+        }
+    }
+
+    #[test]
+    fn long_namespace_descriptions_preserve_history_and_callback_identity() {
+        for name in ["notes", "functions", "mcp__notes"] {
+            let original = "Original notes instructions.".repeat(80);
+            let updated = "更新后的工具说明🌍".repeat(200);
+            let history = vec![
+                json!({"type":"additional_tools","role":"developer","tools":[{
+                    "type":"namespace","name":name,"description":original,
+                    "tools":[{"type":"function","name":"read_file"}]
+                }]}),
+                json!({"type":"additional_tools","role":"developer","tools":[{
+                    "type":"namespace","name":name,"description":updated,
+                    "tools":[{"type":"function","name":"write_file"}]
+                }]}),
+                json!({"type":"function_call","namespace":name,"name":"read_file","call_id":"c","arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":"c","output":"content"}),
+            ];
+            let tools = resolve(&[], &history).unwrap();
+            let registered = native(&tools);
+            let injected = native_history_with_catalog(&history, false, &tools);
+            assert_eq!(tools[0]["description"], updated);
+            assert_eq!(injected[0]["tools"][0]["description"], original);
+            assert_eq!(injected[1]["tools"][0]["description"], updated);
+            assert_eq!(
+                registered[0]["description"],
+                updated.chars().take(1024).collect::<String>()
+            );
+            assert_eq!(registered[0]["tools"].as_array().unwrap().len(), 2);
+            assert_eq!(injected[2]["namespace"], registered[0]["name"]);
+            assert_eq!(injected[3]["call_id"], "c");
+            assert_eq!(
+                client_identity(&tools, registered[0]["name"].as_str(), "read_file"),
+                Some((Some(name.into()), "read_file".into()))
+            );
+        }
+    }
+
     #[test]
     fn converted_tool_history_drops_typed_item_ids_but_preserves_call_links() {
         let tools = parse(&json!([

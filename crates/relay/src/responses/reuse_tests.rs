@@ -22,6 +22,72 @@ fn output() -> Value {
 }
 
 #[test]
+fn namespace_description_tails_participate_in_reuse_and_resource_accounting() {
+    let access = access();
+    let tools = json!([{"type":"namespace","name":"notes","description":format!("{}ORIGINAL_TAIL", "🌍".repeat(1024)),
+        "tools":[{"type":"function","name":"read_file"}]}]);
+    let first = Request::parse(json!({"model":"m","input":"first","tools":tools})).unwrap();
+    let session = Session::new(
+        "native".into(),
+        "fixture".into(),
+        &access,
+        &first,
+        &first.input,
+        &[output()],
+    )
+    .unwrap();
+    let injected =
+        super::super::tool_catalog::native_input(&first.input, false, &first.tools, None);
+    let expected = serde_json::to_vec(&first.dynamic_tools()).unwrap().len()
+        + injected
+            .iter()
+            .map(|item| serde_json::to_vec(item).unwrap().len())
+            .sum::<usize>();
+    assert_eq!(
+        crate::responses::reservation_bytes(None, &access, &first, &first.input, None).unwrap(),
+        expected
+    );
+    assert!(injected[0].to_string().contains("ORIGINAL_TAIL"));
+    let mut history = first.input.clone();
+    history.extend([output(), json!({"role":"user","content":"next"})]);
+    let next = Request::parse(json!({"model":"m","input":history,"tools":tools})).unwrap();
+    if crate::native_cache::enabled() {
+        assert_eq!(
+            session.continuation(&access, &next, &next.input).unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            crate::responses::reservation_bytes(None, &access, &next, &next.input, Some(&session))
+                .unwrap(),
+            serde_json::to_vec(&next.input[2]).unwrap().len()
+        );
+    }
+    let mut changed = tools.clone();
+    changed[0]["description"] = json!(format!("{}CHANGED_TAIL", "🌍".repeat(1024)));
+    for catalog in [changed, json!([])] {
+        let altered = Request::parse(json!({"model":"m","input":history,"tools":catalog})).unwrap();
+        if !altered.tools.is_empty() {
+            assert_eq!(
+                first.dynamic_tools(),
+                altered.dynamic_tools(),
+                "only the unregistered tail changed"
+            );
+        }
+        assert!(
+            session
+                .continuation(&access, &altered, &altered.input)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            matching_sessions(&access, &altered, &altered.input, vec![session.clone()])
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
 fn resource_reservation_counts_only_new_history_on_continuation() {
     let access = access();
     let r = Request::parse(json!({"model":"m","input":"long history ".repeat(1024)})).unwrap();

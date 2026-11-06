@@ -19,6 +19,11 @@ def respond(handler, body, wire, lock):
     assert handler.path == "/v1/responses"
     assert body["store"] is False
     compact = any(item.get("type") == "compaction_trigger" for item in body["input"])
+    if compact and any(item.get("type") in ("custom_tool_call", "tool_search_call")
+                       and item.get("id", "").startswith("fc_") for item in body["input"]):
+        handler.send_response(400)
+        handler.end_headers()
+        return
     serialized = json.dumps(body)
     if "TEST_HOLD" in serialized:
         time.sleep(3)
@@ -68,6 +73,17 @@ def check(work, base, key, other_key, admin, wire, account):
         result = post("/v1/responses", {**body, "stream":stream, "input":body["input"]+[{"type":"compaction_trigger"}]})
         assert result["output"] == [expected]
     assert len(wire) == 3
+    # Existing caller histories can contain an fc_ ID from a function/custom
+    # adaptation. The real upstream rejects that typed ID during compaction.
+    legacy = [{"type":"custom_tool_call","id":"fc_legacy","call_id":"call_legacy",
+               "name":"exec","input":CANARY},
+              {"type":"custom_tool_call_output","id":"ctco_legacy",
+               "call_id":"call_legacy","output":"client result"}]
+    recovered = post("/v1/responses/compact", {**body,"input":legacy})
+    assert recovered["output"] == [expected]
+    assert "id" not in wire[-1]["body"]["input"][0]
+    assert wire[-1]["body"]["input"][0]["call_id"] == "call_legacy"
+    assert wire[-1]["body"]["input"][1] == legacy[1]
     continued = post("/v1/responses", {**body, "input":[expected,{"role":"user","content":"continue"}]})
     assert continued["status"] == "completed"
     before = len(wire)
@@ -81,7 +97,7 @@ def check(work, base, key, other_key, admin, wire, account):
     ws = subprocess.run(["node",str(Path(__file__).with_name("test_native_cache_websocket.mjs")),base,key,"compact-direct"],
         capture_output=True,text=True,encoding="utf-8",timeout=120,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
     assert ws.returncode==0,ws.stdout+ws.stderr
-    assert len(wire)==before+2
+    assert len(wire)==before+3
     assert wire[-1]["body"]["input"][0]==expected
     for marker in ("TEST_TRUNCATED", "TEST_HTTP_FAILURE"):
         before = len(wire)
@@ -112,6 +128,7 @@ def check(work, base, key, other_key, admin, wire, account):
                 "baseInstructions":"","developerInstructions":"", "config":{
                     "model_providers.synthetic.base_url":base+"/v1",
                     "model_providers.synthetic.experimental_bearer_token":key,
+                    "model_providers.synthetic.supports_websockets":True,
                     "model_providers.synthetic.capabilities.remote_compaction":"v2"}})
             thread = start["result"]["thread"]["id"]
             native.call("thread/inject_items",{"threadId":thread,"items":[{"type":"message","role":"user","content":[{"type":"input_text","text":CANARY}]}]})
@@ -123,12 +140,27 @@ def check(work, base, key, other_key, admin, wire, account):
             finish_turn(native,thread)
             assert len(wire)==before+2
             assert any(i.get("encrypted_content")==CIPHER for i in wire[-1]["body"]["input"])
+            # An upstream rejection must reach the installed client immediately,
+            # rather than being ignored until the WebSocket idle timeout.
+            native.call("thread/inject_items",{"threadId":thread,"items":[{"type":"message","role":"user","content":[{"type":"input_text","text":"TEST_HTTP_FAILURE"}]}]})
+            before = len(wire)
+            assert "result" in native.call("thread/compact/start",{"threadId":thread})
+            deadline = time.monotonic() + 10
+            while True:
+                event = native.receive(timeout=max(.1, deadline-time.monotonic()))
+                assert time.monotonic() < deadline, "Compaction rejection stalled"
+                if event.get("method")=="turn/completed" and event["params"]["threadId"]==thread:
+                    assert event["params"]["turn"]["status"]=="failed", event
+                    error = event["params"]["turn"]["error"]
+                    assert error["codexErrorInfo"]["responseTooManyFailedAttempts"]["httpStatusCode"]==429, event
+                    break
+            assert len(wire)==before+1, "Rejected compaction was replayed"
         finally:
             native.close()
     assert admin("/api/operations")["active"] == 0
     records = admin("/api/statistics")["records"]
     compact_records = [row for row in records if row.get("inputTokens") is not None and not row.get("nativeThreadId")]
-    assert len(compact_records)==8
+    assert len(compact_records)==10
     assert all(row["inputTokens"]==10 and row["outputTokens"]==2 and row.get("cachedInputTokens") is None for row in compact_records)
     # Scan service-owned data/logs while alive. The harness writes its synthetic
     # capture only after this check; production must never write either marker.
@@ -157,4 +189,5 @@ def check(work, base, key, other_key, admin, wire, account):
             pass
     assert admin("/api/operations")["active"]==0
     return {"http_json_sse_websocket":"passed","official_remote_compaction_and_continue":"passed",
+            "translated_item_ids_and_existing_history":"passed",
             "no_replay_failure_and_account_stop":"passed","body_disk_scan":"passed"}
