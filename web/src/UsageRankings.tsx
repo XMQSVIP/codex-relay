@@ -188,7 +188,7 @@ export function UsageRankings({
                     <span title="包含排队时间">
                       首响 {formatDuration(row.averageFirstResponseMs)}
                     </span>
-                    <small title="不含排队时间，从开始执行到首个有效输出">
+                    <small title="从提交模型请求到首个有效输出，不含本地排队和提交前准备">
                       模型首响 {formatDuration(row.averageModelFirstResponseMs)}
                     </small>
                     <small>总耗时 {formatDuration(row.averageTotalMs)}</small>

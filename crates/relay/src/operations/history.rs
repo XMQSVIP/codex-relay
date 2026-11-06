@@ -46,7 +46,7 @@ fn grouped_usage(
 SELECT {id} AS entity_id, COUNT(*) AS request_count, SUM(input_tokens) AS input_total,
 SUM(output_tokens) AS output_total, SUM(input_tokens+output_tokens) AS token_total,
 COUNT(input_tokens+output_tokens) AS known_count, SUM(status='failed') AS failed_count,
-AVG(CASE WHEN kind='inference' AND first_delta_ms IS NOT NULL THEN first_delta_ms+COALESCE(wait_ms,0) END) AS first_response,
+AVG(CASE WHEN kind='inference' THEN first_response_ms END) AS first_response,
 AVG(CASE WHEN kind='inference' AND finished_at IS NOT NULL THEN MAX(0,finished_at-started_at) END) AS total_ms,
 SUM(CASE WHEN kind='inference' THEN cached_input_tokens END) AS cached_total,
 SUM(CASE WHEN kind='inference' AND cached_input_tokens IS NOT NULL THEN input_tokens END) AS cache_input_total,
@@ -239,7 +239,7 @@ SUM(input_tokens+output_tokens) FILTER (WHERE kind='inference'),COUNT(input_toke
 SUM(cached_input_tokens) FILTER (WHERE kind='inference'),
 SUM(input_tokens) FILTER (WHERE kind='inference' AND cached_input_tokens IS NOT NULL),
 COUNT(cached_input_tokens) FILTER (WHERE kind='inference'),
-AVG(first_delta_ms+COALESCE(wait_ms,0)) FILTER (WHERE kind='inference'),
+AVG(first_response_ms) FILTER (WHERE kind='inference'),
 AVG(MAX(0,finished_at-started_at)) FILTER (WHERE kind='inference' AND finished_at IS NOT NULL),
 AVG(first_delta_ms) FILTER (WHERE kind='inference')
 FROM requests WHERE {filter}"), bind, |r| {
@@ -269,7 +269,7 @@ FROM requests WHERE {filter}"), bind, |r| {
             .div_ceil(u64::from(page_size))
             .max(1);
         let page = u64::from(page).min(total_pages);
-        let mut statement=db.prepare(&format!("SELECT id,started_at,kind,action,account_id,account_name,group_id,group_name,status,duration_ms,error_code,wait_ms,key_id,model,input_tokens,output_tokens,native_thread_id,native_turn_id,model_outcome,failure_stage,cleanup_error_code,first_delta_ms,delivery_status,cached_input_tokens,key_name,CASE WHEN finished_at IS NOT NULL THEN MAX(0,finished_at-started_at) END,CASE WHEN first_delta_ms IS NOT NULL THEN first_delta_ms+COALESCE(wait_ms,0) END,reasoning_effort,user_agent,streaming,response_model,parameter_handling,scheduling,subagent_kind,service_tier,response_service_tier,endpoint,client_transport,upstream_transport FROM requests WHERE {filter} ORDER BY started_at DESC,id DESC LIMIT {page_size} OFFSET {}",(page-1)*u64::from(page_size))).map_err(storage)?;
+        let mut statement=db.prepare(&format!("SELECT id,started_at,kind,action,account_id,account_name,group_id,group_name,status,duration_ms,error_code,wait_ms,key_id,model,input_tokens,output_tokens,native_thread_id,native_turn_id,model_outcome,failure_stage,cleanup_error_code,first_delta_ms,delivery_status,cached_input_tokens,key_name,CASE WHEN finished_at IS NOT NULL THEN MAX(0,finished_at-started_at) END,first_response_ms,reasoning_effort,user_agent,streaming,response_model,parameter_handling,scheduling,subagent_kind,service_tier,response_service_tier,endpoint,client_transport,upstream_transport FROM requests WHERE {filter} ORDER BY started_at DESC,id DESC LIMIT {page_size} OFFSET {}",(page-1)*u64::from(page_size))).map_err(storage)?;
         let records=statement.query_map(bind,|r|Ok(json!({"endpoint":r.get::<_,Option<String>>(36)?,"clientTransport":r.get::<_,Option<String>>(37)?,"upstreamTransport":r.get::<_,Option<String>>(38)?,"id":r.get::<_,String>(0)?,"startedAt":r.get::<_,i64>(1)?,"kind":r.get::<_,String>(2)?,"action":r.get::<_,String>(3)?,"accountId":r.get::<_,Option<String>>(4)?,"accountName":r.get::<_,Option<String>>(5)?,"groupId":r.get::<_,Option<String>>(6)?,"groupName":r.get::<_,Option<String>>(7)?,"status":r.get::<_,String>(8)?,"durationMs":r.get::<_,Option<i64>>(9)?,"errorCode":r.get::<_,Option<String>>(10)?,"waitMs":r.get::<_,Option<i64>>(11)?,"keyId":r.get::<_,Option<String>>(12)?,"model":r.get::<_,Option<String>>(13)?,"inputTokens":r.get::<_,Option<i64>>(14)?,"outputTokens":r.get::<_,Option<i64>>(15)?,"nativeThreadId":r.get::<_,Option<String>>(16)?,"nativeTurnId":r.get::<_,Option<String>>(17)?,"modelOutcome":r.get::<_,Option<String>>(18)?,"failureStage":r.get::<_,Option<String>>(19)?,"cleanupErrorCode":r.get::<_,Option<String>>(20)?,"firstDeltaMs":r.get::<_,Option<i64>>(21)?,"deliveryStatus":r.get::<_,Option<String>>(22)?,"cachedInputTokens":r.get::<_,Option<i64>>(23)?,"keyName":r.get::<_,Option<String>>(24)?,"totalMs":r.get::<_,Option<i64>>(25)?,"firstResponseMs":r.get::<_,Option<i64>>(26)?,"reasoningEffort":r.get::<_,Option<String>>(27)?,"userAgent":r.get::<_,Option<String>>(28)?,"streaming":r.get::<_,Option<bool>>(29)?,"responseModel":r.get::<_,Option<String>>(30)?,"subagentKind":r.get::<_,Option<String>>(33)?,"serviceTier":r.get::<_,Option<String>>(34)?,"responseServiceTier":r.get::<_,Option<String>>(35)?,"scheduling":r.get::<_,Option<String>>(32)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"parameterHandling":r.get::<_,Option<String>>(31)?.and_then(|s|serde_json::from_str::<Value>(&s).ok()).unwrap_or_else(||json!([]))}))).map_err(storage)?.collect::<std::result::Result<Vec<_>,_>>().map_err(storage)?;
         let bucket_ms = span_ms / 24 + i64::from(span_ms % 24 != 0);
         let mut trend = vec![

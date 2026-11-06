@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 fn summary(input: u64, cached: Option<u64>) -> StreamSummary {
     StreamSummary {
+        model_started_at: None,
         response_model: None,
         response_service_tier: None,
         thread_id: "thread".into(),

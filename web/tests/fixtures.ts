@@ -55,7 +55,7 @@ function usageRankings(records: RequestRecord[], dimension: 'account' | 'key' | 
   }
   return [...rows.values()].map(row => {
     const samples = records.filter(record => record.kind === 'inference' && (dimension === 'model' ? (record.model ?? '') : dimension === 'account' ? record.accountId : record.keyId) === row.id);
-    const first = samples.filter(record => record.firstDeltaMs != null).map(record => record.firstDeltaMs! + (record.waitMs ?? 0));
+    const first = samples.filter(record => record.firstResponseMs != null).map(record => record.firstResponseMs!);
     const modelFirst = samples.filter(record => record.firstDeltaMs != null).map(record => record.firstDeltaMs!);
     const total = samples.filter(record => record.totalMs != null).map(record => record.totalMs!);
     row.averageFirstResponseMs = first.length ? first.reduce((sum, value) => sum + value, 0) / first.length : null;
@@ -82,7 +82,7 @@ function statisticsSummary(records: RequestRecord[]): Statistics['summary'] {
     cancelled: count('cancelled') + count('interrupted'), running: count('running'), queued: count('queued'), timedOut: count('timed_out'),
     queueFull: records.filter(r => r.errorCode === 'QUEUE_FULL').length, averageWaitMs: average(records.map(r => r.waitMs)),
     averageMs: average(records.filter(r => ['succeeded', 'failed'].includes(r.status)).map(r => r.durationMs)),
-    averageFirstResponseMs: average(models.map(r => r.firstDeltaMs == null ? null : r.firstDeltaMs + (r.waitMs ?? 0))),
+    averageFirstResponseMs: average(models.map(r => r.firstResponseMs)),
     averageModelFirstResponseMs: average(models.map(r => r.firstDeltaMs)),
     averageTotalMs: average(models.map(r => r.totalMs)), inferenceRequests: models.length,
     inferenceSucceeded: models.filter(r => r.status === 'succeeded').length, inferenceFailed: models.filter(r => r.status === 'failed').length,

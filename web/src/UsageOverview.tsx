@@ -56,7 +56,7 @@ export function UsageOverview({ data, loading }: { data: Statistics | null; load
             </span>
             <span
               className="usage-response-latency"
-              title="从排队结束、开始执行到首个有效输出，不含排队时间"
+              title="从提交模型请求到首个有效输出，不含本地排队和提交前准备时间"
             >
               平均模型首响 <b>{formatDuration(summary?.averageModelFirstResponseMs)}</b>
             </span>

@@ -370,8 +370,8 @@ impl Lease {
         }
         if let Ok(summary) = result {
             let mut inner = self.owner.inner.lock().unwrap();
-            let saved = inner.db.execute("UPDATE requests SET input_tokens=?1,output_tokens=?2,native_thread_id=?3,native_turn_id=?4,cached_input_tokens=?6,first_delta_ms=CASE WHEN ?7 IS NULL THEN NULL ELSE MAX(0,?7-started_at-COALESCE(wait_ms,0)) END,response_model=?8,response_service_tier=?9 WHERE id=?5",
-                params![summary.usage.as_ref().map(|u|u.input_tokens as i64),summary.usage.as_ref().map(|u|u.output_tokens as i64),summary.thread_id,summary.turn_id,self.id.to_string(),summary.usage.as_ref().and_then(|u|u.cached_input_tokens).map(|n|n as i64),summary.first_delta_at.map(|at|at as i64),summary.response_model,summary.response_service_tier]);
+            let saved = inner.db.execute("UPDATE requests SET input_tokens=?1,output_tokens=?2,native_thread_id=?3,native_turn_id=?4,cached_input_tokens=?6,first_response_ms=CASE WHEN ?7 IS NULL THEN NULL ELSE MAX(0,?7-started_at) END,first_delta_ms=?10,response_model=?8,response_service_tier=?9 WHERE id=?5",
+                params![summary.usage.as_ref().map(|u|u.input_tokens as i64),summary.usage.as_ref().map(|u|u.output_tokens as i64),summary.thread_id,summary.turn_id,self.id.to_string(),summary.usage.as_ref().and_then(|u|u.cached_input_tokens).map(|n|n as i64),summary.first_delta_at.map(|at|at as i64),summary.response_model,summary.response_service_tier,summary.model_first_response_ms()]);
             if let Err(error) = saved {
                 inner.storage_healthy = false;
                 return Err(storage(error));

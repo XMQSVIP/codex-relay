@@ -34,7 +34,7 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
         ("settings", "id,document"),
         (
             "requests",
-            "id,started_at,finished_at,kind,action,account_id,account_name,group_id,group_name,status,duration_ms,error_code,wait_ms,input_tokens,output_tokens,cached_input_tokens,key_id,native_thread_id,native_turn_id,model,response_model,response_service_tier,model_outcome,failure_stage,cleanup_error_code,first_delta_ms,delivery_status,key_name,reasoning_effort,user_agent,streaming,parameter_handling,scheduling,subagent_kind,service_tier,request_content,response_content,endpoint,client_transport,upstream_transport",
+            "id,started_at,finished_at,kind,action,account_id,account_name,group_id,group_name,status,duration_ms,error_code,wait_ms,input_tokens,output_tokens,cached_input_tokens,key_id,native_thread_id,native_turn_id,model,response_model,response_service_tier,model_outcome,failure_stage,cleanup_error_code,first_delta_ms,first_response_ms,delivery_status,key_name,reasoning_effort,user_agent,streaming,parameter_handling,scheduling,subagent_kind,service_tier,request_content,response_content,endpoint,client_transport,upstream_transport",
         ),
         (
             "api_keys",
@@ -132,6 +132,19 @@ mod tests {
         );
         db.execute_batch("PRAGMA user_version=8;").unwrap();
         assert_eq!(initialize(&db).unwrap_err().code, "DATABASE_VERSION");
+    }
+
+    #[test]
+    fn missing_first_response_is_rejected_without_rebuilding_data() {
+        let db = current();
+        db.execute_batch("ALTER TABLE requests DROP COLUMN first_response_ms;")
+            .unwrap();
+        assert_eq!(initialize(&db).unwrap_err().code, "DATABASE_SCHEMA");
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM requests", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

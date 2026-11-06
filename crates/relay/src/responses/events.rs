@@ -10,6 +10,7 @@ mod images;
 mod search;
 
 pub(super) struct Output {
+    pub(super) model_started_at: Option<u64>,
     response_model: Option<String>,
     response: Value,
     sequence: u64,
@@ -50,6 +51,7 @@ fn opaque_fields(raw: &Value, item: &mut Value) {
 impl Output {
     pub fn new(r: &Request) -> Self {
         Self {
+            model_started_at: None,
             response_model: None,
             response: json!({"id":format!("resp_{}",uuid::Uuid::new_v4().simple()),"object":"response","created_at":crate::now_ms()/1000,"completed_at":null,"status":"in_progress","error":null,"incomplete_details":null,"model":r.model,"output":[],"instructions":r.instructions,"tools":r.tools,"tool_choice":r.tool_choice,"parallel_tool_calls":true,"previous_response_id":r.previous,"store":r.store,"reasoning":r.reasoning,"text":r.text,"metadata":r.metadata,"usage":null,"background":false,"max_output_tokens":null,"temperature":null,"top_p":null,"truncation":"disabled"}),
             sequence: 0,
@@ -677,6 +679,7 @@ impl Output {
     }
     pub fn summary(&self, thread: &str, turn: &str) -> Result<StreamSummary> {
         Ok(StreamSummary {
+            model_started_at: self.model_started_at,
             response_model: self.response_model.clone(),
             response_service_tier: None,
             thread_id: thread.into(),

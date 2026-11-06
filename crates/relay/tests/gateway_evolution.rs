@@ -35,6 +35,7 @@ fn request() -> RoutingRequest {
 }
 fn summary() -> StreamSummary {
     StreamSummary {
+        model_started_at: None,
         response_model: None,
         response_service_tier: None,
         thread_id: "thread".into(),

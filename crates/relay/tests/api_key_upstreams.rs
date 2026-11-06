@@ -226,6 +226,10 @@ async fn websocket(State(state): State<Arc<Upstream>>, ws: WebSocketUpgrade) -> 
             for item in response["output"].as_array().unwrap() {
                 if socket.send(Message::Text(json!({"type":"response.output_item.done","output_index":0,"item":item}).to_string().into())).await.is_err(){return;}
             }
+            if value["input"] == "latency-fixture" {
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                if socket.send(Message::Text(json!({"type":"response.output_text.delta","delta":"OK"}).to_string().into())).await.is_err(){break;}
+            }
             if socket.send(Message::Text(json!({"type":"response.completed","response":response}).to_string().into())).await.is_err(){break;}
         }
     })
@@ -2603,5 +2607,63 @@ async fn direct_prewarm_requires_websocket_and_preserves_generate_false() {
             let frame: Value = serde_json::from_slice(&generated[0].2).unwrap();
             assert_eq!(frame["generate"], false);
         }
+    }
+}
+
+#[tokio::test]
+async fn model_first_response_excludes_websocket_handshake_and_fallback_preparation() {
+    for status in [0, 404] {
+        let f = Fixture::new("ws-first").await;
+        let gate = Arc::new(HandshakeGate::default());
+        *f.upstream.ws_handshake.lock().unwrap() = Some(gate.clone());
+        f.upstream.ws_status.store(status, Ordering::SeqCst);
+        let pending = f.request(
+            "POST",
+            "/v1/responses",
+            json!({"model":"test-model","input":"latency-fixture","stream":true}).to_string(),
+            "application/json",
+        );
+        tokio::pin!(pending);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::select! {
+                _ = gate.entered.notified() => {},
+                _ = &mut pending => panic!("request must wait for handshake"),
+            }
+        })
+        .await
+        .unwrap();
+        // Poll the pending request while deliberately holding its handshake.
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
+            _ = &mut pending => panic!("handshake must still be blocked"),
+        }
+        gate.resume.notify_one();
+        let response = pending.await;
+        if response.status() != StatusCode::OK {
+            panic!(
+                "handshake={status}, body={:?}",
+                to_bytes(response.into_body(), 1024 * 1024).await.unwrap()
+            );
+        }
+        let id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let data = f.state.operations.statistics(Default::default()).unwrap();
+        let record = data["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap();
+        let model = record["firstDeltaMs"].as_u64().unwrap();
+        let full = record["firstResponseMs"].as_u64().unwrap();
+        assert!(model >= 25, "model wait remains counted: {record}");
+        assert!(
+            full >= model + 90,
+            "handshake must be excluded only from model latency: {record}"
+        );
+        assert_eq!(record["waitMs"], 0);
     }
 }

@@ -188,6 +188,7 @@ pub(super) async fn prepare_turn(
             timing.submitted();
         }
     }
+    let model_started_at = std::sync::atomic::AtomicU64::new(0);
     let resumed = resumed_waiting.is_some();
     let turn_guard = if let Some(mut waiting) = resumed_waiting {
         if waiting.guard.thread != thread {
@@ -262,6 +263,7 @@ pub(super) async fn prepare_turn(
                     } else if !waiting.submission_valid() {
                         Err(Error::new("NATIVE_TURN_UNAVAILABLE", "原生待答轮次已结束或上下文已变化，未提交剩余工具结果。"))
                     } else {
+                        let _ = model_started_at.compare_exchange(0, crate::now_ms(), std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
                         Ok(())
                     }
                 })=>sent,
@@ -282,6 +284,9 @@ pub(super) async fn prepare_turn(
                 } else if outgoing.is_closed() {
                     Err(Error::new("STREAM_CONSUMER_CLOSED", "客户端已断开。"))
                 } else {
+                    // Repeated after automatic context injection, immediately
+                    // before enqueueing the actual turn/start.
+                    model_started_at.store(crate::now_ms(), std::sync::atomic::Ordering::Relaxed);
                     Ok(())
                 }
             })
@@ -311,6 +316,7 @@ pub(super) async fn prepare_turn(
         control.activate(rpc, &thread, &turn);
     }
     Ok(PreparedTurn {
+        model_started_at: model_started_at.load(std::sync::atomic::Ordering::Relaxed),
         guard: turn_guard,
         directory,
         native_context,

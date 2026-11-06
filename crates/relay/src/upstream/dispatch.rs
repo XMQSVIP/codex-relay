@@ -738,6 +738,7 @@ impl Delivery {
             }
         }
         let mut summary = super::summary(&last, first);
+        summary.model_started_at = self.transfer.model_started_at;
         // A later delivery failure cannot overwrite an observed model terminal.
         let model_error = if terminal && status.is_success() {
             event_error.as_ref()

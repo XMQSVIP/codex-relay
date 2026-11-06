@@ -308,7 +308,7 @@ fn model_usage_and_token_trend_cover_the_filtered_snapshot_with_unknown_and_zero
         json!({"kind":"diagnostic","inputTokens":10000,"outputTokens":10000}),
     );
     insert(&db, json!({"startedAt":2000,"inputTokens":50000}));
-    db.execute("UPDATE requests SET wait_ms=50,first_delta_ms=200,finished_at=started_at+1500 WHERE model='large-model'", []).unwrap();
+    db.execute("UPDATE requests SET wait_ms=50,first_delta_ms=200,first_response_ms=250,finished_at=started_at+1500 WHERE model='large-model'", []).unwrap();
 
     let result = statistics(&ops, json!({"pageSize":20}));
     assert_eq!(result["records"].as_array().unwrap().len(), 20);
@@ -452,9 +452,9 @@ fn ranking_diagnostics_use_known_inference_samples_in_each_dimension() {
         &db,
         json!({"kind":"management","status":"failed","inputTokens":0,"cachedInputTokens":0,"startedAt":1003}),
     );
-    db.execute("UPDATE requests SET first_delta_ms=200,wait_ms=50,finished_at=started_at+1000 WHERE started_at=1000", []).unwrap();
-    db.execute("UPDATE requests SET first_delta_ms=900,wait_ms=100,finished_at=started_at+2000 WHERE started_at=1001", []).unwrap();
-    db.execute("UPDATE requests SET first_delta_ms=9999,finished_at=started_at+9999 WHERE kind='management'", []).unwrap();
+    db.execute("UPDATE requests SET first_delta_ms=200,first_response_ms=250,wait_ms=50,finished_at=started_at+1000 WHERE started_at=1000", []).unwrap();
+    db.execute("UPDATE requests SET first_delta_ms=900,first_response_ms=1000,wait_ms=100,finished_at=started_at+2000 WHERE started_at=1001", []).unwrap();
+    db.execute("UPDATE requests SET first_delta_ms=9999,first_response_ms=9999,finished_at=started_at+9999 WHERE kind='management'", []).unwrap();
     let result = statistics(&ops, json!({}));
     for field in ["accountUsage", "keyUsage", "modelUsage"] {
         let row = &result[field][0];
@@ -479,7 +479,7 @@ fn ranking_diagnostics_use_known_inference_samples_in_each_dimension() {
     assert!(unknown["keyUsage"][0]["averageModelFirstResponseMs"].is_null());
     assert!(unknown["summary"]["averageModelFirstResponseMs"].is_null());
     db.execute(
-        "UPDATE requests SET first_delta_ms=0 WHERE started_at=1001",
+        "UPDATE requests SET first_delta_ms=0,first_response_ms=100 WHERE started_at=1001",
         [],
     )
     .unwrap();

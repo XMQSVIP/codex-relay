@@ -436,6 +436,7 @@ async fn tool_roundtrip(compact: bool, update: Option<&'static str>, history_upd
     let next = Request::parse(next_body).unwrap();
     continuation.incoming = continuation.waiting.take();
     let (tx, mut rx) = mpsc::channel(128);
+    let resume_started = crate::now_ms();
     let result = run_profiled(
         &rpc,
         &provider(),
@@ -471,6 +472,8 @@ async fn tool_roundtrip(compact: bool, update: Option<&'static str>, history_upd
         return;
     }
     let summary = result.unwrap();
+    assert!(summary.model_started_at.unwrap() >= resume_started);
+    assert!(summary.model_first_response_ms().is_some());
     assert!(summary.cleanup_confirmed);
     let usage = summary.usage.unwrap();
     assert_eq!(

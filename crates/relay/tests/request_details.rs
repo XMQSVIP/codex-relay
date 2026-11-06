@@ -256,7 +256,7 @@ fn request_latency_includes_queue_time_and_keeps_unavailable_values_null() {
             None,
         ),
     ] {
-        db.execute("INSERT INTO requests(id,started_at,finished_at,kind,action,status,duration_ms,wait_ms,first_delta_ms,model) VALUES(?1,?2,?3,'inference','responses',?4,?5,?6,?7,'test-model')", params![id,start,finished,status,duration,wait,first]).unwrap();
+        db.execute("INSERT INTO requests(id,started_at,finished_at,kind,action,status,duration_ms,wait_ms,first_delta_ms,first_response_ms,model) VALUES(?1,?2,?3,'inference','responses',?4,?5,?6,?7,?7+COALESCE(?6,0),'test-model')", params![id,start,finished,status,duration,wait,first]).unwrap();
     }
     let data = stats(&ops);
     let records = data["records"].as_array().unwrap();
@@ -283,7 +283,7 @@ fn request_latency_includes_queue_time_and_keeps_unavailable_values_null() {
 }
 
 #[test]
-fn both_model_settlement_paths_preserve_the_first_text_timestamp() {
+fn both_model_settlement_paths_exclude_preparation_but_preserve_total_first_response() {
     let temp = tempfile::tempdir().unwrap();
     let ops = Operations::open(temp.path()).unwrap();
     let db = Connection::open(temp.path().join("operations.sqlite3")).unwrap();
@@ -298,6 +298,7 @@ fn both_model_settlement_paths_preserve_the_first_text_timestamp() {
         )
         .unwrap();
         let summary = StreamSummary {
+            model_started_at: Some((start + 650) as u64),
             response_model: Some("actual-model".into()),
             response_service_tier: Some("default".into()),
             thread_id: "thread".into(),
@@ -335,7 +336,7 @@ fn both_model_settlement_paths_preserve_the_first_text_timestamp() {
         assert_eq!(record["model"], "requested-model");
         assert_eq!(record["responseModel"], "actual-model");
         assert_eq!(record["responseServiceTier"], "default");
-        assert_eq!(record["firstDeltaMs"], 500);
+        assert_eq!(record["firstDeltaMs"], 100);
         assert_eq!(record["firstResponseMs"], 750);
         assert!(record["totalMs"].as_i64().unwrap() >= 1000);
     }
@@ -461,4 +462,74 @@ async fn http_requests_record_reasoning_effort_and_bounded_user_agent_before_rou
         assert!(!data.to_string().contains(&key.secret));
     }
     assert_eq!(stats(&state.operations)["summary"]["total"], 4);
+}
+
+#[test]
+fn model_latency_never_falls_back_to_admission_and_survives_failed_results() {
+    let temp = tempfile::tempdir().unwrap();
+    let ops = Operations::open(temp.path()).unwrap();
+    let db = Connection::open(temp.path().join("operations.sqlite3")).unwrap();
+    for legacy in [false, true] {
+        for outcome in ["completed", "failed", "cancelled"] {
+            for (submitted, first, expected) in [
+                (None, Some(750), None),
+                (Some(600), None, None),
+                (Some(750), Some(750), Some(0)),
+                (Some(800), Some(750), None),
+                (Some(650), Some(750), Some(100)),
+            ] {
+                let lease = ops
+                    .begin(None, None, "inference", "responses", true)
+                    .unwrap();
+                let id = lease.request_id().to_string();
+                let start = codex_relay::now_ms() as i64 - 1000;
+                db.execute(
+                    "UPDATE requests SET started_at=?1,wait_ms=250 WHERE id=?2",
+                    params![start, id],
+                )
+                .unwrap();
+                let summary = StreamSummary {
+                    model_started_at: submitted.map(|n| (start + n) as u64),
+                    first_delta_at: first.map(|n| (start + n) as u64),
+                    outcome: outcome.into(),
+                    error_code: (outcome != "completed").then(|| "REQUEST_CANCELLED".into()),
+                    response_model: None,
+                    response_service_tier: None,
+                    thread_id: "thread".into(),
+                    turn_id: "turn".into(),
+                    item_ids: vec![],
+                    native_status: None,
+                    error_message: None,
+                    delta_count: 1,
+                    text_bytes: 1,
+                    usage: None,
+                    interrupt_acknowledged: false,
+                    cleanup_confirmed: true,
+                    guard: Default::default(),
+                };
+                if legacy {
+                    lease.finish_inference(&Ok(summary)).unwrap();
+                } else {
+                    lease
+                        .finish_execution(
+                            &ExecutionOutcome {
+                                model: Ok(summary),
+                                cleanup_error: None,
+                            },
+                            None,
+                        )
+                        .unwrap();
+                }
+                let data = stats(&ops);
+                let record = data["records"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["id"] == id)
+                    .unwrap();
+                assert_eq!(record["firstDeltaMs"], json!(expected));
+                assert_eq!(record["firstResponseMs"], json!(first));
+            }
+        }
+    }
 }

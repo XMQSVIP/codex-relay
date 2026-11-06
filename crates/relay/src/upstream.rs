@@ -219,6 +219,7 @@ pub(crate) async fn read_json(mut response: reqwest::Response) -> Result<Value> 
 }
 pub(crate) fn summary(value: &Value, first: Option<u64>) -> crate::streaming::StreamSummary {
     crate::streaming::StreamSummary {
+        model_started_at: None,
         response_model: crate::streaming::reported_model(&value["model"]),
         response_service_tier: value["service_tier"]
             .as_str()

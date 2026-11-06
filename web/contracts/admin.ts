@@ -233,6 +233,7 @@ export const requestRecordSchema = z.object({
   modelOutcome: z.string().nullable().optional(),
   failureStage: z.string().nullable().optional(),
   cleanupErrorCode: z.string().nullable().optional(),
+  // Model submission to first effective output; excludes local queue/preparation.
   firstDeltaMs: z.number().nullable().optional(),
   deliveryStatus: z.string().nullable().optional(),
 });

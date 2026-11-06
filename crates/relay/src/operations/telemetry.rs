@@ -58,13 +58,13 @@ impl Lease {
             model_error.as_ref().map(|e| e.code.as_str()),
             summary.and_then(|s| s.first_delta_at),
         );
-        let result=inner.db.execute("UPDATE requests SET status=?1,finished_at=?2,duration_ms=?3,error_code=?4,input_tokens=?5,output_tokens=?6,native_thread_id=?7,native_turn_id=?8,model_outcome=?9,failure_stage=?10,cleanup_error_code=?11,first_delta_ms=CASE WHEN ?12 IS NULL THEN NULL ELSE MAX(0,?12-started_at-COALESCE(wait_ms,0)) END,delivery_status=?13,cached_input_tokens=?15,response_model=?16,response_service_tier=?17 WHERE id=?14 AND status='running'",
+        let result=inner.db.execute("UPDATE requests SET status=?1,finished_at=?2,duration_ms=?3,error_code=?4,input_tokens=?5,output_tokens=?6,native_thread_id=?7,native_turn_id=?8,model_outcome=?9,failure_stage=?10,cleanup_error_code=?11,first_response_ms=CASE WHEN ?12 IS NULL THEN NULL ELSE MAX(0,?12-started_at) END,first_delta_ms=?18,delivery_status=?13,cached_input_tokens=?15,response_model=?16,response_service_tier=?17 WHERE id=?14 AND status='running'",
             params![status,crate::now_ms() as i64,self.started.elapsed().as_millis().min(i64::MAX as u128) as i64,code,
                 summary.and_then(|s|s.usage.as_ref()).map(|u|u.input_tokens as i64),summary.and_then(|s|s.usage.as_ref()).map(|u|u.output_tokens as i64),
                 summary.map(|s|s.thread_id.as_str()),summary.map(|s|s.turn_id.as_str()),summary.map(|s|s.outcome.as_str()).unwrap_or("failed"),
                 if model_error.is_some(){code.map(failure_stage)}else if let Some(e)=response_error{Some(failure_stage(&e.code))}else if outcome.cleanup_error.is_some(){Some("cleanup")}else{None},
                 outcome.cleanup_error.as_ref().map(|e|e.code.as_str()),summary.and_then(|s|s.first_delta_at).map(|at|at as i64),
-                if response_error.is_some(){"failed"}else{"terminal_pending"},self.id.to_string(),summary.and_then(|s|s.usage.as_ref()).and_then(|u|u.cached_input_tokens).map(|n|n as i64),summary.and_then(|s|s.response_model.as_deref()),summary.and_then(|s|s.response_service_tier.as_deref())]);
+                if response_error.is_some(){"failed"}else{"terminal_pending"},self.id.to_string(),summary.and_then(|s|s.usage.as_ref()).and_then(|u|u.cached_input_tokens).map(|n|n as i64),summary.and_then(|s|s.response_model.as_deref()),summary.and_then(|s|s.response_service_tier.as_deref()),summary.and_then(|s|s.model_first_response_ms())]);
         if result.is_err() {
             inner.storage_healthy = false;
         }

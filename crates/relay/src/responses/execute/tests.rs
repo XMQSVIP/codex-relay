@@ -676,3 +676,78 @@ async fn unusable_tool_output_is_interrupted_instead_of_parked() {
         assert!(result.cleanup_confirmed);
     }
 }
+
+#[tokio::test]
+async fn model_first_response_excludes_preparation_but_includes_turn_ack_wait() {
+    let (client, peer) = tokio::io::duplex(65536);
+    let (read, write) = tokio::io::split(client);
+    let rpc = Rpc::from_io(read, write);
+    rpc.set_location(Some(crate::account_location::Location {
+        timezone: "UTC".into(),
+        ..Default::default()
+    }));
+    let prepared = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let server_prepared = prepared.clone();
+    let server = tokio::spawn(async move {
+        let (read, mut write) = tokio::io::split(peer);
+        let mut lines = BufReader::new(read).lines();
+
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let frame: Value = serde_json::from_str(&line).unwrap();
+            let mut events = vec![json!({"id":frame["id"],"result":{}})];
+            match frame["method"].as_str().unwrap() {
+                "thread/start" => {
+                    events[0]["result"] = json!({"thread":{"id":"thread"},"model":"m","modelProvider":"p","sandbox":{"type":"readOnly"},"approvalPolicy":"untrusted"});
+                }
+                "thread/inject_items" => {
+                    tokio::time::sleep(Duration::from_millis(80)).await;
+                    server_prepared.store(crate::now_ms(), Ordering::Relaxed);
+                }
+                "turn/start" => {
+                    // First output comes after the acknowledgement: starting the
+                    // clock on the acknowledgement would incorrectly lose 40 ms.
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                    events[0]["result"] = json!({"turn":{"id":"turn"}});
+                    events.push(json!({"method":"item/agentMessage/delta","params":{"threadId":"thread","turnId":"turn","itemId":"msg","delta":"OK"}}));
+                    events.push(json!({"method":"rawResponseItem/completed","params":{"threadId":"thread","turnId":"turn","item":{"type":"message","id":"msg","role":"assistant","content":[{"type":"output_text","text":"OK"}]}}}));
+                    events.push(json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"completed"}}}));
+                }
+                other => panic!("unexpected operation {other}"),
+            }
+            for event in events {
+                write
+                    .write_all(format!("{event}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    let request = Request::parse(json!({"model":"m","input":"hello"})).unwrap();
+    let provider = Provider {
+        execution: Default::default(),
+        id: "p".into(),
+        model: "m".into(),
+        base_url: "http://127.0.0.1/v1".into(),
+        auth: "api-key".into(),
+        forward_headers: vec![],
+        required_headers: vec![],
+        mcp_servers: vec![],
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (tx, _rx) = mpsc::channel(32);
+    let summary = run(
+        &rpc,
+        &provider,
+        directory.path(),
+        &request,
+        &request.input,
+        tx,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(summary.model_started_at.unwrap() >= prepared.load(Ordering::Relaxed));
+    assert!(summary.model_first_response_ms().unwrap() >= 35);
+    rpc.close();
+    server.await.unwrap();
+}

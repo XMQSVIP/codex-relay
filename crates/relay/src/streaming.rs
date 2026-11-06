@@ -407,6 +407,9 @@ pub fn encode_sse(event: &Value) -> Result<String> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamSummary {
+    /// Submission to the model transport (native: app-server submission boundary).
+    #[serde(skip)]
+    pub model_started_at: Option<u64>,
     pub response_model: Option<String>,
     /// Actual tier explicitly reported by the upstream, never the requested tier.
     pub response_service_tier: Option<String>,
@@ -426,6 +429,14 @@ pub struct StreamSummary {
     pub interrupt_acknowledged: bool,
     pub cleanup_confirmed: bool,
     pub guard: Stats,
+}
+impl StreamSummary {
+    pub(crate) fn model_first_response_ms(&self) -> Option<i64> {
+        self.first_delta_at
+            .zip(self.model_started_at)
+            .and_then(|(first, started)| first.checked_sub(started))
+            .map(|ms| ms.min(i64::MAX as u64) as i64)
+    }
 }
 /// Keep only bounded model identifiers explicitly reported by the upstream.
 pub(crate) fn reported_model(value: &Value) -> Option<String> {
@@ -573,7 +584,11 @@ async fn guarded_stream_inner(
             "轮次启动结果未知，必须回收专用后端；未重发请求。",
         )
     };
-    let turn=rpc.request("turn/start",json!({"threadId":thread,"input":[{"type":"text","text":request.prompt,"text_elements":[]}]})).await.map_err(|_| uncertain())?;
+    let model_started_at = std::sync::atomic::AtomicU64::new(0);
+    let turn=rpc.request_checked("turn/start",json!({"threadId":thread,"input":[{"type":"text","text":request.prompt,"text_elements":[]}]}), || {
+        model_started_at.store(crate::now_ms(), std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }).await.map_err(|_| uncertain())?;
     let turn_id = id(&turn["turn"], "id").map_err(|_| uncertain())?;
     let created_at = turn["turn"]["startedAt"]
         .as_u64()
@@ -637,6 +652,7 @@ async fn guarded_stream_inner(
     }
     let metrics = guard.client_metrics();
     Ok(StreamSummary {
+        model_started_at: Some(model_started_at.load(std::sync::atomic::Ordering::Relaxed)),
         response_model: stats.response_model.clone(),
         response_service_tier: None,
         thread_id: thread,

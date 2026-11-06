@@ -312,6 +312,7 @@ pub async fn run(
         }
     }
     Ok(StreamSummary {
+        model_started_at: None,
         response_model,
         response_service_tier: None,
         thread_id: thread,

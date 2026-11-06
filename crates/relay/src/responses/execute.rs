@@ -18,6 +18,7 @@ mod tests;
 // The turn guard travels with its event receiver across tool waits. Dropping it
 // retains process protection until interruption/cleanup has been attempted.
 struct PreparedTurn {
+    model_started_at: u64,
     guard: continuation::TurnGuard,
     directory: Option<PathBuf>,
     native_context: reuse::Context,
@@ -73,6 +74,7 @@ pub(crate) async fn run_profiled(
         callbacks: Vec::new(),
         turn_ended: false,
     };
+    collected.output.model_started_at = Some(prepared.model_started_at);
     // Keep all guards in this future while collecting. A response boundary may
     // hand off a still-running turn; only turn/completed confirms native cleanup.
     let work = stream::collect(

@@ -86,7 +86,11 @@ pub(crate) async fn run(
                     first.get_or_insert(crate::now_ms());
                     outgoing.send(event).await.map_err(|_| closed())?;
                 }
-                Some("response.completed") => return Ok(super::summary(&event["response"], first)),
+                Some("response.completed") => {
+                    let mut summary = super::summary(&event["response"], first);
+                    summary.model_started_at = transfer.model_started_at;
+                    return Ok(summary);
+                }
                 Some("response.failed" | "response.incomplete" | "error") => {
                     return Err(Error::new(
                         "UPSTREAM_REQUEST_FAILED",

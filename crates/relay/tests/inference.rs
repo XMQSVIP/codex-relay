@@ -508,6 +508,7 @@ fn inference_usage_is_persisted_once_and_missing_usage_remains_unknown() {
     let key = Uuid::new_v4();
     lease.bind_client(key).unwrap();
     let summary = StreamSummary {
+        model_started_at: None,
         response_model: None,
         response_service_tier: None,
         thread_id: "native-thread".into(),

@@ -6,7 +6,7 @@ CREATE TABLE requests (
     error_code TEXT, wait_ms INTEGER, input_tokens INTEGER, output_tokens INTEGER,
     cached_input_tokens INTEGER, key_id TEXT, native_thread_id TEXT, native_turn_id TEXT,
     model TEXT, response_model TEXT, response_service_tier TEXT, model_outcome TEXT, failure_stage TEXT,
-    cleanup_error_code TEXT, first_delta_ms INTEGER, delivery_status TEXT, key_name TEXT,
+    cleanup_error_code TEXT, first_delta_ms INTEGER, first_response_ms INTEGER, delivery_status TEXT, key_name TEXT,
     endpoint TEXT, client_transport TEXT, upstream_transport TEXT,
     reasoning_effort TEXT, user_agent TEXT, streaming INTEGER, parameter_handling TEXT, scheduling TEXT, subagent_kind TEXT, service_tier TEXT,
     request_content TEXT, response_content TEXT

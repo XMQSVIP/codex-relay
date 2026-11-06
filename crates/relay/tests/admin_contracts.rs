@@ -208,7 +208,7 @@ async fn management_responses_cover_console_contract_variants() {
         ).unwrap();
     }
     db.execute(
-        "UPDATE requests SET first_delta_ms=200,wait_ms=50 WHERE input_tokens=100",
+        "UPDATE requests SET first_delta_ms=200,first_response_ms=250,wait_ms=50 WHERE input_tokens=100",
         [],
     )
     .unwrap();

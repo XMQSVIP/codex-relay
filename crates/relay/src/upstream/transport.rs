@@ -147,6 +147,7 @@ impl Connections {
     }
 }
 pub(super) struct Transfer {
+    pub model_started_at: Option<u64>,
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub chunks: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>,
@@ -213,8 +214,9 @@ pub(super) fn headers(source: &HeaderMap) -> HeaderMap {
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
-fn from_http(response: reqwest::Response) -> Transfer {
+fn from_http(response: reqwest::Response, model_started_at: Option<u64>) -> Transfer {
     Transfer {
+        model_started_at,
         status: response.status(),
         headers: headers(response.headers()),
         chunks: Box::pin(response.bytes_stream().map(|r| r.map_err(http_error))),
@@ -319,7 +321,7 @@ pub(super) async fn send(
                     .await,
                 );
             } else if ![404, 405, 426, 501].contains(&response.status().as_u16()) {
-                return Ok(from_http(response));
+                return Ok(from_http(response, None));
             }
         }
         if socket.is_some() {
@@ -331,7 +333,9 @@ pub(super) async fn send(
             object.remove("background");
             object.insert("type".into(), Value::String("response.create".into()));
             before_send()?;
-            let reading = submit(socket, frame.to_string()).await?;
+            let frame = frame.to_string();
+            let model_started_at = Some(crate::now_ms());
+            let reading = submit(socket, frame).await?;
             let stream =
                 futures_util::stream::unfold(Some(reading), |slot: Option<Reading>| async move {
                     let mut slot = slot?;
@@ -371,6 +375,7 @@ pub(super) async fn send(
             let mut response_headers = HeaderMap::new();
             response_headers.insert(header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
             return Ok(Transfer {
+                model_started_at,
                 status: StatusCode::OK,
                 headers: response_headers,
                 chunks: Box::pin(stream),
@@ -384,15 +389,14 @@ pub(super) async fn send(
         }
     }
     before_send()?;
-    let response = client
+    let request = client
         .request(method, config.url(path)?)
         .headers(forwarded)
         .timeout(Duration::from_secs(1800))
-        .body(body)
-        .send()
-        .await
-        .map_err(http_error)?;
-    Ok(from_http(response))
+        .body(body);
+    let model_started_at = Some(crate::now_ms());
+    let response = request.send().await.map_err(http_error)?;
+    Ok(from_http(response, model_started_at))
 }
 
 #[cfg(test)]

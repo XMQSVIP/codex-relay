@@ -377,7 +377,7 @@ export function StatisticsPage({
             <h2
               className="records-title"
               tabIndex={0}
-              title="首响与总耗时包含排队时间，模型首响不含排队；点击详情查看完整记录。"
+              title="首响与总耗时包含排队时间，模型首响不含本地排队和提交前准备；点击详情查看完整记录。"
             >
               请求记录 <span className="count">{s?.total ?? 0} 条</span>
             </h2>
