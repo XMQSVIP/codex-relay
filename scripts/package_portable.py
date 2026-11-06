@@ -51,7 +51,7 @@ def main():
     binary = ROOT/'target/release/codex-relay.exe'
     assert binary.is_file() and (ROOT/'web/dist/index.html').is_file(), 'Build first'
     dlls = imports(binary)
-    version = json.loads((ROOT/'package.json').read_text())['version']
+    version = json.loads((ROOT/'package.json').read_text(encoding='utf-8'))['version']
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     name = f'CodexRelay-{version}-windows-x64-{stamp}'
     destination = ROOT/'dist'

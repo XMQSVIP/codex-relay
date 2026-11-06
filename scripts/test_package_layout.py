@@ -182,6 +182,27 @@ class PackageLayoutTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             package_portable.main()
 
+    def test_windows_package_reads_utf8_metadata_with_gbk_default(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_root(root)
+            metadata = {'version': 'test', 'description': '打包便携版'}
+            (root / 'package.json').write_text(
+                json.dumps(metadata, ensure_ascii=False), encoding='utf-8')
+            original_read_text = Path.read_text
+
+            def read_text_with_gbk_default(path, encoding=None, errors=None):
+                return original_read_text(path, encoding=encoding or 'gbk', errors=errors)
+
+            # Reproduce Chinese Windows defaults on every CI platform, including
+            # runners with UTF-8 mode enabled. Explicit encodings still apply.
+            with patch.object(Path, 'read_text', read_text_with_gbk_default):
+                self.run_package(root)
+            archive, = (root / 'dist').glob('*.zip')
+            with zipfile.ZipFile(archive) as bundle:
+                manifest = json.loads(bundle.read(f'{archive.stem}/manifest.json'))
+                self.assertEqual(manifest['version'], metadata['version'])
+
     def test_payload_allowlist_and_no_unpacked_copy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
