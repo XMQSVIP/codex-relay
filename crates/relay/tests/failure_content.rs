@@ -217,6 +217,9 @@ async fn websocket_failure_keeps_lane_and_original_frame() {
             .unwrap()
             .unwrap();
         let received: Value = serde_json::from_str(received.to_text().unwrap()).unwrap();
+        if !native {
+            assert_eq!(received["status"], 503);
+        }
         let stats = state.operations.statistics(StatsQuery::default()).unwrap();
         let id = Uuid::parse_str(stats["records"][0]["id"].as_str().unwrap()).unwrap();
         let saved = state.operations.request_content(id).unwrap();

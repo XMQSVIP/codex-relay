@@ -624,11 +624,12 @@ async fn start_inner(
             let (transport, status, body) = if cache.is_some() {
                 let mut body = output.clone();
                 if body["type"] == "error" && body["error"].is_null() {
-                    body["error"] = websocket::error_event(Error::new(
+                    let wire_error = websocket::error_event(Error::new(
                         body["code"].as_str().unwrap_or("UPSTREAM_REQUEST_FAILED"),
                         body["message"].as_str().unwrap_or("原生请求失败。"),
-                    ))["error"]
-                        .clone();
+                    ));
+                    body["status"] = wire_error["status"].clone();
+                    body["error"] = wire_error["error"].clone();
                 }
                 if let Some(lane) = request.original["body"]["stream_id"].as_str() {
                     body["stream_id"] = json!(lane);
