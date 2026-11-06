@@ -1,4 +1,4 @@
-"""Package current source for macOS/Windows development, with or without Git."""
+"""Package current source for Windows/macOS/Linux development, with or without Git."""
 import hashlib
 import json
 import os
@@ -15,6 +15,7 @@ ROOT_FILES = {
     "AGENTS.md", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
     ".gitignore", ".gitattributes", ".npmrc", ".nvmrc", ".node-version", "rust-toolchain.toml",
     "启动中转站.cmd", "打包便携版.cmd", "启动中转站.command", "打包便携版.command",
+    "打包便携版.sh",
 }
 EXCLUDED_DIRS = {
     ".git", ".cache", "data", "target", "node_modules", "dist", "dist-legacy", "__pycache__",

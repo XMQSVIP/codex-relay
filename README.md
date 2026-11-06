@@ -123,7 +123,7 @@ pnpm build:release
 pnpm start
 ```
 
-`pnpm start` 使用 release 构建；调试运行可使用 `pnpm start:debug`。制作便携包可使用根目录的 `打包便携版.cmd`（Windows）或 `打包便携版.command`（macOS）。Linux 发行包使用 `python3 scripts/package_linux.py`。环境准备和检查命令见 [Windows 开发说明](docs/WINDOWS-DEVELOPMENT.md)、[macOS 开发说明](docs/MACOS-DEVELOPMENT.md) 与 [Linux 服务器部署](docs/LINUX-SERVER.md)。
+`pnpm start` 使用 release 构建；调试运行可使用 `pnpm start:debug`。制作便携包可使用根目录的 `打包便携版.cmd`（Windows）、`打包便携版.command`（macOS）或 `sh ./打包便携版.sh`（Linux，也可运行 `pnpm package:linux`）。环境准备和检查命令见 [Windows 开发说明](docs/WINDOWS-DEVELOPMENT.md)、[macOS 开发说明](docs/MACOS-DEVELOPMENT.md) 与 [Linux 服务器部署](docs/LINUX-SERVER.md)。
 
 构建前会自动检查可用内存：低于 3 GiB 或检测失败时，Rust 构建、测试和 Clippy 使用单任务（`--jobs 1`）；3–6 GiB（含边界）最多 2 并发；大于 6 GiB 不限制，保留原并发设置。限制生效时，命令行或 `CARGO_BUILD_JOBS` 指定的更低并发会保留，且不超过可用 CPU 数；命令行设置优先于环境变量。Windows 同时检查物理与虚拟内存余量，打包和源码启动入口也使用此检查。运行 `pnpm check:memory` 可单独查看结果；环境变量 `BRIDGE_BUILD_MIN_FREE_GIB` 可调整双任务起点（默认 3），超过该值的两倍后不再限制。手动构建请使用 `node scripts/cargo-with-memory.mjs <cargo 参数>`，例如 `node scripts/cargo-with-memory.mjs test --locked`；直接执行 `cargo` 不会自动经过检查。
 

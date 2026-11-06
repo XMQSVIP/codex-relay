@@ -33,6 +33,7 @@ class PackageLayoutTests(unittest.TestCase):
                 'docs/MACOS-PORTABLE.md', '打包便携版.command', '启动中转站.command',
                 'scripts/package_macos.py', 'scripts/test_macos_portable.py',
                 'scripts/Start-Relay.sh', 'scripts/Prepare-Relay.sh',
+                '打包便携版.sh',
             )
             for relative in files:
                 path = root / relative
@@ -53,6 +54,8 @@ class PackageLayoutTests(unittest.TestCase):
                 for entry in manifest['files']:
                     self.assertEqual(entry['sha256'], hashlib.sha256(b'current source').hexdigest())
                     self.assertEqual(bundle.read('codex-relay/' + entry['path']), b'current source')
+                    if entry['path'] == '打包便携版.sh':
+                        self.assertEqual(entry['mode'], '0o755')
             # Packaging never rewrites the input checkout or its imported records.
             self.assertEqual((root / 'SOURCE-MANIFEST.json').read_text(), '{"historical":true}')
 

@@ -99,17 +99,23 @@ sh scripts/Start-Relay.sh --require-admin-token
 
 构建必须经过内存检查入口，小内存机器限制为单任务。也可在其他机器构建静态发行包后上传，无需在业务服务器编译。
 
-发行包在原生 Linux x64 / ARM64 构建机生成。Ubuntu 构建机安装 `musl-tools` 并添加对应 Rust target，然后运行：
+发行包在原生 Linux x64 / ARM64 构建机生成，另需 Python 3.12 或以上版本。Windows 上可使用同架构的 Linux 虚拟机或 WSL，也可直接下载 GitHub Actions 的对应 Linux 包；Windows 的 `.cmd` 打包入口生成 Windows 包。
+
+Ubuntu 构建机安装 `musl-tools`，准备 Node.js 24、pnpm 和稳定 Rust，然后在仓库根目录运行：
 
 ```sh
 # x64 示例；ARM64 将 target 改为 aarch64-unknown-linux-musl。
+sudo apt-get install -y musl-tools
 rustup target add x86_64-unknown-linux-musl
+pnpm install --frozen-lockfile
 export CC=musl-gcc
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
-python3 scripts/package_linux.py
+sh ./打包便携版.sh
 ```
 
-ARM64 同时设置 `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc`。打包器检查 ELF 架构并拒绝动态解释器或动态库依赖，只复制发行文件，生成 SHA-256 和第三方许可证。解压验证覆盖含空格路径、无 Node 环境启动、管理鉴权、页面资源、重复实例拒绝、SIGTERM 和同目录重启，通过后才输出正式 ZIP。
+ARM64 设置 `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc`。入口按本机架构打包，不能在 x64 上直接生成 ARM64 包。还可运行 `pnpm package:linux`，两者均转发参数至 `scripts/package_linux.py`；例如 `sh ./打包便携版.sh --skip-build` 复用已完成的前端及对应 musl release 构建，`--help` 查看参数。
+
+打包器依次构建前端、通过内存检查入口构建 Rust release、检查静态 ELF 并执行解压启动验证；仅验证通过后才在 `dist/` 生成 `CodexRelay-版本-linux-x64或arm64-时间.zip` 和 `.zip.sha256`。包中包含程序、前端、`start-linux.sh`、systemd 模板、默认配置、清单和第三方许可证，不包含运行数据或登录凭据。解压验证覆盖含空格路径、无 Node 环境启动、管理鉴权、页面资源、重复实例拒绝、SIGTERM 和同目录重启。
 
 定向检查：
 

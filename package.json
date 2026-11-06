@@ -26,6 +26,7 @@
     "typecheck": "pnpm --filter @codex-relay/console typecheck",
     "build": "pnpm build:web && node scripts/cargo-with-memory.mjs build",
     "build:release": "pnpm build:web && node scripts/cargo-with-memory.mjs build --release --locked",
+    "package:linux": "sh ./打包便携版.sh",
     "test": "node scripts/cargo-with-memory.mjs test",
     "check": "pnpm check:rust && pnpm test:contracts && pnpm check:web",
     "check:quick": "pnpm check:quick:rust && pnpm check:quick:web",
