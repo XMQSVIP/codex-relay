@@ -594,8 +594,8 @@ async fn operations_routes_persist_groups_enforce_admission_and_expose_filtered_
         .0,
         StatusCode::OK
     );
-    // Reserve queue capacity independently of account setup: start now takes
-    // the setup lock before admission to avoid a setup/lease lock inversion.
+    // Fill the ordinary queue independently. A setup owner must reject busy
+    // admission immediately instead of joining that queue while holding setup.
     let waiting_state = state.clone();
     let waiting = tokio::spawn(async move {
         waiting_state
@@ -610,18 +610,16 @@ async fn operations_routes_persist_groups_enforce_admission_and_expose_filtered_
     })
     .await
     .unwrap();
-    assert_eq!(
-        call(
-            &app,
-            &token,
-            "POST",
-            &format!("/api/accounts/{id}/start"),
-            json!({})
-        )
-        .await
-        .0,
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    let (status, body) = call(
+        &app,
+        &token,
+        "POST",
+        &format!("/api/accounts/{id}/start"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"]["code"], "CONCURRENCY_LIMIT");
     let error = waiting
         .await
         .unwrap()
@@ -638,7 +636,7 @@ async fn operations_routes_persist_groups_enforce_admission_and_expose_filtered_
     )
     .await;
     assert_eq!(stats["summary"]["total"], 1);
-    assert_eq!(stats["records"][0]["errorCode"], "QUEUE_FULL");
+    assert_eq!(stats["records"][0]["errorCode"], "CONCURRENCY_LIMIT");
     let revision = state.operations.snapshot()["revision"].as_u64().unwrap();
     assert_eq!(
         call(
