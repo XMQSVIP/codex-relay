@@ -1,0 +1,44 @@
+/* Narrow screens show one readable record at a time, with its actions in reach. */
+@media(max-width:760px){
+  .records-panel .records-table,.key-table{min-width:0;width:100%;display:block}
+  .records-panel .records-table thead,.key-table thead{display:none}
+  .records-panel .records-table tbody,.key-table tbody{display:block}
+  .records-panel .records-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 14px;padding:20px;border-top:1px solid var(--line)}
+  .records-panel .records-table td{display:block;max-width:none;padding:0;border:0}
+  .records-panel .record-key{grid-column:1;grid-row:1}
+  .records-panel .record-result{grid-column:2;grid-row:1;justify-self:end}
+  .records-panel .record-account{grid-column:1;grid-row:2}
+  .records-panel .record-model{grid-column:1;grid-row:3}
+  .records-panel .record-latency{grid-column:2;grid-row:2/4;min-width:100px}
+  .records-panel .record-effort{grid-column:1;grid-row:4}
+  .records-panel .record-effort::before{content:attr(data-label);color:var(--muted);font-size:12px;margin-right:8px}
+  .records-panel .record-tokens{grid-column:1;grid-row:5}
+  .records-panel .record-time{grid-column:1;grid-row:6}
+  .records-panel .records-table td.record-open{grid-column:2;grid-row:5/7;align-self:end;justify-self:end}
+  .records-panel .record-time time{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+  .records-panel .record-time small{margin:0}
+  .key-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;padding:20px;border-top:1px solid var(--line)}
+  .key-table td{display:block;max-width:none;padding:0;border:0}
+  .key-table .key-name-cell{grid-column:1;grid-row:1}
+  .key-table-name{max-width:none}
+  .key-table .key-state-cell{grid-column:2;grid-row:1;justify-self:end}
+  .key-table .key-secret-cell{grid-column:1/-1;grid-row:2;padding:8px 10px;background:var(--surface-subtle);border-radius:5px}
+  .key-table-secret{max-width:none;justify-content:space-between}
+  .key-table-secret code{min-width:0;word-break:normal}
+  .key-table td[data-label="分组"]{grid-column:1;grid-row:3}
+  .key-table td[data-label="调用方并发"]{grid-column:2;grid-row:3;justify-self:end}
+  .key-table td[data-label="分组"]::before,.key-table td[data-label="调用方并发"]::before{content:attr(data-label);display:block;color:var(--muted);font-size:11px;margin-bottom:4px}
+  .key-table .key-actions-cell{grid-column:1/-1;grid-row:4;border-top:1px solid var(--line);padding-top:10px}
+  .key-table .key-table-actions{justify-content:flex-end;gap:8px}
+  .key-table-actions .icon-action{min-width:44px;height:44px}
+  .key-table .key-table-date{display:none}
+  .key-table td[colspan]{grid-column:1/-1}
+  .key-table .key-expanded-row{display:block;padding-top:0}
+  .key-delete-confirm{flex-direction:column;align-items:flex-start;padding:14px}
+  .key-delete-confirm .key-actions{display:flex;gap:8px;flex-wrap:wrap}
+}
+
+@media(max-width:760px){
+  .records-panel .record-connection{grid-column:1/-1;grid-row:7}
+  .records-panel .record-endpoint::before{content:attr(data-label);color:var(--muted);font-size:12px;margin-right:8px}
+}

@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/relay"]
+resolver = "3"
+
+# Keep panic locations without repeatedly linking full dependency debug symbols.
+# The default test profile inherits dev; release remains unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Opt in with: node scripts/cargo-with-memory.mjs test --profile debugging
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+[profile.debugging.package."*"]
+debug = true
+
+[profile.release]
+lto = "thin"
+strip = true

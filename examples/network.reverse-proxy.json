@@ -1,0 +1,9 @@
+{
+  "listeners": [
+    {
+      "listen": "127.0.0.1:4318",
+      "baseUrls": ["https://bridge.example.com/v1"],
+      "allowedOrigins": []
+    }
+  ]
+}
