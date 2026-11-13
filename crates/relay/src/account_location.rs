@@ -197,15 +197,19 @@ impl Location {
         }
     }
     pub fn apply_thread(&self, params: &mut Value, now: DateTime<Utc>) {
+        self.apply_thread_config(params);
+        if let Some(text) = params["developerInstructions"].as_str() {
+            params["developerInstructions"] = json!(self.align_text(text, "developer", now));
+        }
+    }
+
+    pub(crate) fn apply_thread_config(&self, params: &mut Value) {
         if !params["config"].is_object() {
             params["config"] = json!({});
         }
         params["config"]["include_environment_context_time"] = json!(false);
         // Location configuration does not enable search; keep the caller's web_search mode.
         params["config"]["tools.web_search.location"] = self.search_location();
-        if let Some(text) = params["developerInstructions"].as_str() {
-            params["developerInstructions"] = json!(self.align_text(text, "developer", now));
-        }
     }
 }
 

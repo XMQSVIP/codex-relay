@@ -36,6 +36,8 @@ with client.responses.stream(model="<模型名>", input="写一段介绍", store
 
 默认 HTTP/SSE；WS 优先模式只用于 Responses 生成，`background=true` 使用 HTTP。WS 请求会去除传输控制字段 stream/background 并封装为 response.create；下游 WebSocket 的 type/stream_id/event_id 由桥接层处理。上游明确不支持 WS 握手时可在发送生成请求前回退 HTTP，认证失败、限流或发送后断线不会自动重放。独立 compact 和响应查询/删除始终使用 HTTP。
 
+DeepSeek 官方 Responses 可用 API Key 直连账户，基础 URL 填 `https://api.deepseek.com`，传输选 HTTP/SSE。客户端使用 Relay 的 `/v1/responses`，Relay 转发到官方 `/responses`。固定 `instructions` 和上游 `usage.input_tokens_details.cached_tokens` 保留；DeepSeek 的自动缓存由上游管理，续聊时由客户端发送所需上下文。DeepSeek Chat Completions 客户端直接使用供应商的 `/chat/completions`。本地合成回归入口为 `node scripts/cargo-with-memory.mjs test --locked --test api_key_upstreams deepseek_responses_http`。见 [DeepSeek Responses](https://api-docs.deepseek.com/guides/responses_api/)。
+
 下游 WebSocket 收到上游 HTTP JSON 时，按实际状态输出完成、失败、未完成或后台排队/处理中事件；上游取消返回取消错误，无效 JSON 或缺少响应状态返回 `UPSTREAM_INVALID_RESPONSE`。HTTP 转发保留上游原始响应正文，协议错误仍记为失败，不记为模型成功，也不自动重放。
 
 `store` 按请求交给上游，不会强制改为 false；中转站保存响应归属和加密条目绑定，不保存完整响应正文，上游是否保存由其自身策略决定。`previous_response_id` 续接必须满足响应绑定及上游可用性；上游 WS 连接丢失后，不能只靠持久化的响应 ID 恢复，应完整回放历史并开始新链。查询/删除缺少有效绑定时返回 404，跨 Key、模型或账户配置变更不能绕过绑定校验。
@@ -50,7 +52,7 @@ with client.responses.stream(model="<模型名>", input="写一段介绍", store
 
 以下参数映射、输入类型及工具适配限制仅适用于原生账户。
 
-支持 `model`、文本 `input`、`instructions`、`stream`、`store`、`previous_response_id`、`metadata`、function `tools`、`tool_choice=auto/none`、`reasoning.effort/summary`、`text.format=text/json_object/json_schema`、`text.verbosity`、`service_tier`。顶层 `instructions` 映射到 `baseInstructions`（省略则设为空），清空第二层默认 developerInstructions；历史 `system` 消息转为原生能保留的 `developer` 角色。原生仍可能加入权限、环境和工具上下文，详见兼容说明。
+支持 `model`、文本 `input`、`instructions`、`stream`、`store`、`previous_response_id`、`metadata`、function `tools`、`tool_choice=auto/none`、`reasoning.effort/summary`、`text.format=text/json_object/json_schema`、`text.verbosity`、`service_tier`。顶层 `instructions` 映射到 `developerInstructions`，`baseInstructions` 设为空。调用方固定提示在模型输入的初始 `developer` 上下文出现一次，历史 `system` 消息转为 `developer` 并保留其历史位置。原生仍会按策略加入权限、环境和工具上下文，详见兼容说明。
 
 SDK 调用 `responses.create(...)` 时可省略 `stream`，默认读取完整 JSON；需要流式响应时显式传 `stream=True`，或使用 `responses.stream(...)`。流式开关不改变 `reasoning.effort`；`high` 仍原样传给原生后端。请求记录中的“响应类型”保存实际采用的流式/非流式设置，原生 WebSocket 会话记为流式；没有该字段时显示“未知”。
 
@@ -176,6 +178,7 @@ HTTP 和原生 WebSocket 推理使用已准备的安装信息，请求前不重�
 | `context_management` | 原生适配路径忽略；API Key 直连路径保留并交给上游处理，见下文 |
 | `prompt_cache_key` | 优化开启时仅作为本地账户亲和提示；不透传为原生缓存键，不控制上游缓存。关闭优化时忽略 |
 | `prompt_cache_retention` | 忽略，不能控制原生或上游保留策略；不代表关闭缓存 |
+| `prompt_cache_options`、`prompt_cache_breakpoint` | 原生 app-server 线路在发出 turn 前返回 HTTP 400／`INVALID_INPUT`（WebSocket 返回同码错误事件）。API Key 直连将字段交给上游，是否支持由上游决定 |
 | `safety_identifier`、`user` | 忽略，不更改原生安全标识 |
 | `client_metadata` | 优化开启时先提取本地会话、线程和父线程身份；仅将 `x-codex-turn-metadata` JSON 字符串里的非保留字符串字段映射到原生轮次元数据，其余不按原值转发 |
 | `max_tool_calls`、function `strict` | 忽略；函数实际按非严格模式执行 |
@@ -198,7 +201,7 @@ HTTP 和原生 WebSocket 推理使用已准备的安装信息，请求前不重�
 
 - **附加输出与续聊**：`include` 被忽略不等于删除推理历史；适配器保留原生返回的受支持条目，但不会因为 include 中指定了某项就补出原生未提供的数据。普通 HTTP 续聊仍需客户端回传历史。
 - **工具并行**：不能依靠 `parallel_tool_calls=false` 阻止一轮返回多个工具调用。Responses 响应目前固定返回 `parallel_tool_calls=true`，该值不是本轮发生并行执行的观测结果。需要工具按顺序执行时，调用方还应控制自己的执行顺序。
-- **缓存与速度**：`prompt_cache_key` 仅用于本地选路，不控制上游缓存键；关闭优化后忽略它也不代表每次都重新计算全部输入。实际命中以原生报告的缓存输入 Token 为准，可查看管理台缓存用量或响应的 `usage.input_tokens_details.cached_tokens`；未报告时为未知，不能按零推断。
+- **缓存与速度**：`prompt_cache_key` 用于本地选路。实际命中以原生报告的缓存输入 Token 为准，可查看管理台或 `usage.input_tokens_details.cached_tokens`。未报告时保留未知。需要显式缓存断点的调用方可选择确认支持该参数的 API Key 直连。用 `node scripts/cargo-with-memory.mjs test --locked --test responses_api --test api_key_upstreams` 验证原生拒绝和直连字段保留，测试使用本地合成上游。
 - **元数据与追踪**：`client_metadata` 的其他顶层字段、非字符串值及保留的身份字段不按原值转发，可能影响依赖这些字段的追踪关联。中转站本地识别子代理标记是独立逻辑，可识别的字段范围不等于转发范围，见[子代理请求标记](OPERATIONS.md#子代理请求标记)。
 - **custom 工具与 grammar**：工具仍可调用，原始输入文本交给客户端执行；grammar 仅作为工具说明，不提供约束解码。客户端仍需处理格式或解析失败，不能把出现该提示当作已经发生工具错误。所有 custom 声明都会记录这项适配说明，即使没有设置 grammar。
 

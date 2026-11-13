@@ -36,7 +36,7 @@ curl "$BRIDGE_BASE_URL/responses" \
 | Responses 语义 | 中转站调用的原生协议 |
 | --- | --- |
 | 初始化 | 已检测版本的 `clientInfo`，`initialize` 确认后发 `initialized` |
-| 指令、工具、线程 | `thread/start`，顶层 instructions → baseInstructions；developerInstructions 清空；dynamicTools 由合并目录注册 |
+| 指令、工具、线程 | `thread/start`，顶层 `instructions` → `developerInstructions`，`baseInstructions` 设为空；`dynamicTools` 由合并目录注册 |
 | 历史及扩展输入 | 按顺序 `thread/inject_items`；按 RPC 字节预算分批 |
 | 模型生成 | `turn/start`；reasoning、service tier、JSON Schema 映射到原生轮次参数 |
 | 已完成轮次的参数变化 | 同一 thread 的下一 turn 可调整强度、摘要、服务等级和 JSON Schema；省略覆盖值时恢复已确认默认值 |

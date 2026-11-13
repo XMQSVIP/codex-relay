@@ -348,6 +348,45 @@ async fn blocked_tool_reply_checks_validity_only_after_capacity_is_available() {
 }
 
 #[tokio::test]
+async fn responses_thread_applies_account_location_without_rewriting_fixed_instructions() {
+    let (rpc, mut outgoing) = Rpc::new();
+    rpc.set_location(Some(crate::account_location::Location {
+        timezone: "UTC".into(),
+        ..Default::default()
+    }));
+    let instructions = "<codex_apps_client_time_context><timezone>Asia/Shanghai</timezone><current_date>2000-01-01</current_date></codex_apps_client_time_context>";
+    let params = json!({"developerInstructions":instructions});
+    let (result, ()) = tokio::join!(rpc.start_responses_thread(params.clone()), async {
+        let request = outgoing.recv().await.unwrap();
+        assert_eq!(request["method"], "thread/start");
+        assert_eq!(request["params"]["developerInstructions"], instructions);
+        assert_eq!(
+            request["params"]["config"]["include_environment_context_time"],
+            false
+        );
+        assert_eq!(
+            request["params"]["config"]["tools.web_search.location"]["timezone"],
+            "UTC"
+        );
+        rpc.receive(&json!({"id":request["id"],"result":{}}).to_string())
+            .unwrap();
+    });
+    result.unwrap();
+    let (result, ()) = tokio::join!(rpc.request("thread/start", params), async {
+        let request = outgoing.recv().await.unwrap();
+        assert!(
+            request["params"]["developerInstructions"]
+                .as_str()
+                .unwrap()
+                .contains("<timezone>UTC</timezone>")
+        );
+        rpc.receive(&json!({"id":request["id"],"result":{}}).to_string())
+            .unwrap();
+    });
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn checked_submission_revalidates_after_context_injection_without_leaking_pending_rpc() {
     let (rpc, mut outgoing) = Rpc::new();
     rpc.set_location(Some(crate::account_location::Location {

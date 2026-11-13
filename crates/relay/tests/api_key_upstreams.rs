@@ -489,9 +489,12 @@ impl Drop for Fixture {
 }
 impl Fixture {
     async fn new(transport: &str) -> Self {
+        Self::with_base_path(transport, "/prefix/v1").await
+    }
+    async fn with_base_path(transport: &str, path: &str) -> Self {
         let upstream = Arc::new(Upstream::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}/prefix/v1", listener.local_addr().unwrap());
+        let base = format!("http://{}{path}", listener.local_addr().unwrap());
         let upstream_app = Router::new()
             .route("/prefix/v1/responses", post(http).get(websocket))
             .fallback(http)
@@ -604,6 +607,40 @@ impl Fixture {
         let bytes = to_bytes(r.into_body(), 64 * 1024 * 1024).await.unwrap();
         (s, serde_json::from_slice(&bytes).unwrap())
     }
+}
+
+#[tokio::test]
+async fn deepseek_responses_http_keeps_root_path_instructions_and_automatic_cache_usage() {
+    let f = Fixture::with_base_path("http-sse", "").await;
+    let upstream = json!({
+        "id":"19460ef2-58da-46c5-9510-9e7b04c47e4a","object":"response","status":"completed",
+        "model":"deepseek-flash","store":false,
+        "output":[
+            {"type":"reasoning","content":[{"type":"reasoning_text","text":"synthetic"}]},
+            {"type":"message","role":"assistant","status":"completed",
+             "content":[{"type":"output_text","text":"{\"ok\":true}"}]}
+        ],
+        "usage":{"input_tokens":1800,"input_tokens_details":{"cached_tokens":1200},
+                 "output_tokens":20,"output_tokens_details":{"reasoning_tokens":8},"total_tokens":1820}
+    });
+    *f.upstream.response_override.lock().unwrap() = Some(upstream.to_string());
+    let body = json!({"model":"deepseek-flash","instructions":"Fixed JSON instructions",
+        "input":[{"role":"user","content":"Synthetic snapshot"}],"store":false,
+        "text":{"format":{"type":"json_object"}},"reasoning":{"effort":"high"}});
+    let (status, output) = f.json("/v1/responses", body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{output}");
+    assert_eq!(output, upstream);
+    {
+        let calls = f.upstream.calls.lock().unwrap();
+        let call = calls.last().unwrap();
+        assert_eq!(call.0, "/responses");
+        assert_eq!(call.1, "Bearer upstream-test-secret");
+        assert_eq!(serde_json::from_slice::<Value>(&call.2).unwrap(), body);
+    }
+    let stats = f.state.operations.statistics(Default::default()).unwrap();
+    let row = &stats["records"][0];
+    assert_eq!(row["cachedInputTokens"], 1200);
+    assert_eq!(row["inputTokens"], 1800);
 }
 
 #[tokio::test]
@@ -768,7 +805,12 @@ async fn direct_upstream_routes_and_models_work_through_a_secondary_group() {
 #[tokio::test]
 async fn imports_are_disabled_and_http_preserves_parameters_errors_and_identity() {
     let f = Fixture::new("http-sse").await;
-    let payload = json!({"model":"test-model","input":"hello","store":true,"temperature":0.7,"vendor_extension":{"nested":123},"tools":[{"type":"vendor_tool"}]});
+    let payload = json!({"model":"test-model","input":[
+        {"role":"developer","content":[{"type":"input_text","text":"stable fixture",
+            "prompt_cache_breakpoint":{"mode":"explicit"}}]},
+        {"role":"user","content":"hello"}],
+        "prompt_cache_options":{"mode":"explicit","ttl":"30m"},"prompt_cache_key":"synthetic-cache-key",
+        "store":true,"temperature":0.7,"vendor_extension":{"nested":123},"tools":[{"type":"vendor_tool"}]});
     let (status, response) = f.json("/v1/responses", payload.clone()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(response["upstream_extension"]["kept"], true);

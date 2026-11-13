@@ -57,6 +57,25 @@ async fn responses_auth_validation_and_storage_are_scoped_before_native_dispatch
         .secret;
     let app = router(state.clone(), dir.path().join("web"));
     let basic = json!({"model":"allowed","input":"hello"});
+    for (parameter, payload) in [
+        (
+            "prompt_cache_options",
+            json!({"model":"allowed","input":"hello","prompt_cache_options":{"mode":"explicit"}}),
+        ),
+        (
+            "prompt_cache_breakpoint",
+            json!({"model":"allowed","input":[{"role":"developer","content":[
+                {"type":"input_text","text":"stable fixture","prompt_cache_breakpoint":{"mode":"explicit"}}
+            ]}]}),
+        ),
+    ] {
+        let (status, body) = call(&app, "POST", "/v1/responses", &key, payload).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "INVALID_INPUT");
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains(parameter) && message.contains("API Key"));
+    }
+    assert_eq!(state.operations.snapshot()["active"], 0);
     assert_eq!(
         call(&app, "POST", "/v1/responses", &admin, basic.clone())
             .await
@@ -402,13 +421,11 @@ fn json_mode_preserves_instructions_and_tool_outputs_support_content_arrays() {
     .unwrap();
     let mut params = json!({"developerInstructions":"caller instructions","config":{}});
     r.apply_thread(&mut params);
-    assert_eq!(params["baseInstructions"], "caller instructions");
-    assert!(
-        params["developerInstructions"]
-            .as_str()
-            .unwrap()
-            .contains("valid JSON object")
-    );
+    assert_eq!(params["baseInstructions"], "");
+    let developer = params["developerInstructions"].as_str().unwrap();
+    assert!(developer.starts_with("caller instructions\n\nOutput format:"));
+    assert_eq!(developer.matches("caller instructions").count(), 1);
+    assert!(developer.contains("valid JSON object"));
     assert_eq!(r.instructions.as_deref(), Some("caller instructions"));
     let mut turn = json!({});
     r.apply_turn(&mut turn);

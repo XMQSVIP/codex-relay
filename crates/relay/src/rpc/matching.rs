@@ -22,6 +22,16 @@ impl Rpc {
             .await
     }
 
+    pub(crate) async fn start_responses_thread(&self, mut params: Value) -> Result<Value> {
+        // Preserve the caller's top-level instructions verbatim while applying account location.
+        let location = self.inner.location.lock().unwrap().clone();
+        if let Some(location) = location {
+            location.apply_thread_config(&mut params);
+        }
+        self.raw_request("thread/start", params, Duration::from_secs(15), &|| Ok(()))
+            .await
+    }
+
     /// Check readiness at the wire boundary, including any automatic context
     /// injection. Once sent, await the reply so the caller can clean up its turn.
     pub(crate) async fn request_checked(

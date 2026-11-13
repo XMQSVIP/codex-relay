@@ -133,6 +133,11 @@ pub(super) fn validate_reasoning_content(value: &Value) -> Result<()> {
 
 impl Request {
     pub fn parse(v: Value) -> Result<Self> {
+        if !v["prompt_cache_options"].is_null() {
+            return Err(invalid(
+                "当前原生 app-server 线路不支持 prompt_cache_options。请使用支持该字段的 Responses API Key 直连线路。",
+            ));
+        }
         // Desktop can keep the initial effort at the top level and append
         // configuration_update items when the user changes it mid-conversation.
         let reasoning_context_all_turns = v["reasoning"]["context"] == "all_turns";
@@ -365,10 +370,10 @@ impl Request {
             // effort, summary and tier are updated after validating a tool wait.
             params["config"]["features.step_model_switching"] = json!(true);
         }
-        // Both desktop and SDK callers already supply their intended instructions.
-        // Avoid layering the inner agent's default base prompt over that request.
-        params["baseInstructions"] = json!(self.instructions.as_deref().unwrap_or(""));
-        params["developerInstructions"] = json!("");
+        // The isolated native tool policy can render base instructions twice.
+        // Clear the built-in base prompt and put caller text in the initial developer context.
+        params["baseInstructions"] = json!("");
+        let mut instructions = self.instructions.clone().unwrap_or_default();
         if !self.text["verbosity"].is_null() {
             params["config"]["model_verbosity"] = self.text["verbosity"].clone();
         }
@@ -376,13 +381,13 @@ impl Request {
             // app-server exposes outputSchema (strict JSON Schema), but no JSON
             // mode. Do not send an unconstrained schema as strict=true: providers
             // reject it. Use instructions plus validation before emitting text.
-            let original = params["developerInstructions"].as_str().unwrap_or("");
-            params["developerInstructions"] = json!(format!(
-                "{original}\n\nOutput format: Respond with exactly one valid JSON object. \
+            instructions.push_str(
+                "\n\nOutput format: Respond with exactly one valid JSON object. \
                  Do not wrap the JSON in Markdown or add prose outside it. \
-                 Tool calls may be used when needed; the final answer must be a JSON object."
-            ));
+                 Tool calls may be used when needed; the final answer must be a JSON object.",
+            );
         }
+        params["developerInstructions"] = json!(instructions);
     }
     pub fn json_object(&self) -> bool {
         self.text["format"]["type"] == "json_object"
@@ -512,6 +517,9 @@ pub(super) fn normalize_input(input: &Value) -> Result<Vec<Value>> {
                 if !["user","assistant","system","developer"].contains(&role.as_str()){return Err(invalid("消息 role 无效。"));}
                 let content=if let Some(s)=v["content"].as_str(){vec![json!({"type":if role=="assistant"{"output_text"}else{"input_text"},"text":s})]}else{v["content"].as_array().cloned().ok_or_else(||invalid("消息 content 必须是文本或内容数组。"))?};
                 for p in &content{
+                    if p.get("prompt_cache_breakpoint").is_some() {
+                        return Err(invalid("当前原生 app-server 线路不支持 prompt_cache_breakpoint。请使用支持显式缓存断点的 Responses API Key 直连线路。"));
+                    }
                     if p["type"]=="input_image" {
                         if role!="user"{return Err(invalid("图片只能作为 user 输入。"));}
                         keys(p,&["type","image_url","detail"])?;

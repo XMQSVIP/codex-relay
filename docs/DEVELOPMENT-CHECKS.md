@@ -129,6 +129,13 @@ python scripts/probe_native_memory_compaction.py
 
 macOS/Linux 将 `--binary` 改为实际二进制路径，例如 `target/debug/codex-relay`。矩阵脚本可通过 `--cases` 筛选文本、工具、推理内容、参数恢复和逻辑身份用例；`--thread-reclamation-only` 调用 `scripts/test_native_thread_reclamation.py` 辅助模块，验证线程及增量字节预算、热点保留和目录轮换，辅助模块不单独运行。线程关闭确认与分页异常由 `rpc::reclamation::` 库测试覆盖。场景边界详见 [Responses 原生验收](RESPONSES.md#原生传输与兼容范围)。列出脚本或浏览器测试清单不代表已执行验收。
 
+原生固定提示回归通过本机 app-server 和模拟上游捕获两轮独立的 JSON 请求，核对顶层 `instructions` 在初始 developer 上下文只出现一次、当前快照在后、原生线程独立。供应商实际缓存命中需看真实用量。安装 [SDK 测试依赖](RESPONSES-COMPATIBILITY.md) 后，可在 macOS/Linux 运行：
+
+```sh
+node scripts/cargo-with-memory.mjs build --locked --bin codex-relay
+python scripts/test_responses_sdk.py --model-host 127.0.0.1 --relay-binary target/debug/codex-relay --codex-path "$(command -v codex)" --instructions-only
+```
+
 `legacy/` 的历史 TypeScript 回归使用 `pnpm legacy:check`，不属于当前服务的默认检查。只有修改历史实现时才需要运行。
 
 ## 请求原文调试

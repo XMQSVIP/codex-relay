@@ -1,6 +1,6 @@
 """Isolated, synthetic native/HTTP/official OpenAI SDK integration.
 
-Requires a built debug executable, prepared native installation, openai/httpx,
+Requires a built debug executable, an installed app-server, SDK dependencies,
 and --model-host set to a private IPv4 address already assigned to this machine.
 No production state, credentials or external model service are used.
 """
@@ -26,6 +26,7 @@ from responses_native_client import native_turn
 
 ROOT = Path(__file__).resolve().parent.parent
 seen = []
+INSTRUCTION_SNAPSHOT = "SYNTHETIC_INSTRUCTION_SNAPSHOT_"
 CLIENT_IMAGE_CODE = 'const result = await tools.image_gen__imagegen({prompt: "blue whale"});\ngeneratedImage(result);\n'
 CLIENT_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGNgYPhPIhrVMKph2GoAAJLb/wFh5Z4RAAAAAElFTkSuQmCC'
 
@@ -97,6 +98,9 @@ class Model(http.server.BaseHTTPRequestHandler):
                 item["namespace"] = "functions"
             if "MALFORMED_ARGUMENT_REPLAY" in str(history):
                 item["arguments"] = "{broken"
+        elif any(INSTRUCTION_SNAPSHOT in str(item) for item in history):
+            item = {"type": "message", "id": f"msg_{len(seen)}", "role": "assistant", "status": "completed",
+                    "content": [{"type": "output_text", "text": '{"result":"verified"}', "annotations": []}]}
         else:
             if "CUSTOM_IMAGE_TOOL" in str(history):
                 assert custom_result["output"][0]["text"] == "CLIENT_GENERATED_IMAGE"
@@ -140,11 +144,45 @@ class Model(http.server.BaseHTTPRequestHandler):
             pass  # Expected when native cancellation closes an in-flight model request.
 
 
+def check_native_instructions(sdk):
+    fixed = "固定规则 01\nUse the current snapshot only."
+    snapshots = [f"{INSTRUCTION_SNAPSHOT}{i}" for i in (1, 2)]
+    first = len(seen)
+    for snapshot in snapshots:
+        response = sdk.responses.create(
+            model="gpt-6.1-sol", instructions=fixed, input=[{"role": "user", "content": snapshot}],
+            store=False, text={"format": {"type": "json_object"}},
+        )
+        assert json.loads(response.output_text) == {"result": "verified"}
+    captured = seen[first:]
+    assert len(captured) == 2
+    keys = set()
+    for body, snapshot in zip(captured, snapshots, strict=True):
+        parts = [(item.get("role"), part.get("text", "")) for item in body["input"]
+                 for part in item.get("content", [])]
+        assert sum(text.count(fixed) for _, text in parts) == 1, "fixed instructions duplicated or lost"
+        assert fixed not in (body.get("instructions") or "")
+        (developer_index, developer_text), = [
+            (index, text) for index, (role, text) in enumerate(parts)
+            if role == "developer" and text.startswith(fixed)
+        ]
+        assert "Respond with exactly one valid JSON object" in developer_text
+        assert developer_index < next(index for index, (role, _) in enumerate(parts) if role == "user")
+        assert [text for role, text in parts if role == "user" and INSTRUCTION_SNAPSHOT in text] == [snapshot]
+        assert not any(role == "assistant" for role, _ in parts)
+        keys.add(body["prompt_cache_key"])
+    assert len(keys) == 2 and all(keys), "the two requests must use independent native threads"
+    print("Native JSON mode sends one fixed developer prompt before each independent snapshot", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-host", required=True)
     parser.add_argument("--relay-binary", type=Path, default=ROOT / "target/debug/codex-relay.exe")
-    parser.add_argument("--compact-only", action="store_true", help="verify SDK explicit compaction with synthetic upstream")
+    parser.add_argument("--codex-path", type=Path, help="prepare this app-server in the isolated fixture")
+    checks = parser.add_mutually_exclusive_group()
+    checks.add_argument("--compact-only", action="store_true", help="verify SDK explicit compaction with synthetic upstream")
+    checks.add_argument("--instructions-only", action="store_true", help="verify native fixed instructions on independent requests")
     args = parser.parse_args()
     assert ipaddress.ip_address(args.model_host).is_private
     model = http.server.ThreadingHTTPServer((args.model_host, 0), Model)
@@ -158,9 +196,11 @@ def main():
         (root / "web").mkdir()
         (root / "home").mkdir()
         (root / "web/index.html").write_text("Synthetic test", encoding="utf-8")
-        shutil.copyfile(ROOT / ".cache/launch-config.json", root / ".cache/launch-config.json")
+        if args.codex_path is None:
+            shutil.copyfile(ROOT / ".cache/launch-config.json", root / ".cache/launch-config.json")
         # Windows locks running executables; leave the Cargo build output free.
-        shutil.copyfile(args.relay_binary, root / "codex-relay.exe")
+        executable = root / "codex-relay.exe"
+        shutil.copy2(args.relay_binary, executable)
         (root / "home/config.toml").write_text(f'''
 model="gpt-6.1-sol"
 model_provider="synthetic"
@@ -181,6 +221,9 @@ remote_compaction="v2"
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("CODEX_", "OPENAI_", "CHATGPT_", "ANTHROPIC_", "AZURE_OPENAI_"))}
         env["CODEX_HOME"] = str(root / "home")
         env["NO_PROXY"] = f"127.0.0.1,localhost,{args.model_host}"
+        if args.codex_path is not None:
+            subprocess.run([str(executable), "prepare", "--codex-path", str(args.codex_path.resolve())],
+                           cwd=root, env=env, check=True, timeout=30, stdout=subprocess.DEVNULL)
         with (root / "service.log").open("wb") as log:
             proc = subprocess.Popen([str(root / "codex-relay.exe"), "serve", "--port", str(port), "--web-dir", str(root / "web")], cwd=root, env=env, stdout=log, stderr=log, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             base = f"http://127.0.0.1:{port}"
@@ -216,6 +259,12 @@ remote_compaction="v2"
                     model.shutdown()
                     model.server_close()
                     print("PASS: official SDK compact returns real item; 1 synthetic request; admission released", flush=True)
+                    return
+                check_native_instructions(sdk)
+                if args.instructions_only:
+                    sdk.close()
+                    model.shutdown()
+                    model.server_close()
                     return
                 for stream_options in [{}, {"stream": False}, {"stream": None}]:
                     plain = sdk.responses.create(model="gpt-6.1-sol", input="Hello", store=False,

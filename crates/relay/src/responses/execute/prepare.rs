@@ -119,12 +119,8 @@ pub(super) async fn prepare_turn(
         }
     };
     let cwd = directory.as_deref().unwrap_or(cwd);
-    let mut params = crate::native_session::thread_params(
-        provider,
-        cwd,
-        request.dynamic_tools(),
-        request.instructions.as_deref(),
-    )?;
+    let mut params =
+        crate::native_session::thread_params(provider, cwd, request.dynamic_tools(), None)?;
     request.apply_thread(&mut params);
     if tracker.is_some() {
         params["config"]["thread_unload_delay_secs"] = json!(0);
@@ -143,7 +139,7 @@ pub(super) async fn prepare_turn(
         }
         thread
     } else {
-        let started = rpc.request("thread/start", params).await?;
+        let started = rpc.start_responses_thread(params).await?;
         crate::native_session::verify_policy(&started, provider)?;
         default_effort = started["reasoningEffort"].as_str().map(str::to_owned);
         default_service_tier = match started.get("serviceTier") {
