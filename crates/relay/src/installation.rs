@@ -376,27 +376,8 @@ pub async fn prepare(pid: Option<u32>) -> Result<Installation> {
         ));
     }
     let desktop = &desktops[0];
-    let mut backends: Vec<_> = snapshot
-        .processes
-        .iter()
-        .filter(|p| p.is_app_server && p.parent_pid == desktop.pid)
-        .collect();
-    // Recent desktops run more than one app-server from the same signed binary.
-    backends.sort_by(|a, b| a.executable.cmp(&b.executable));
-    backends.dedup_by(|a, b| a.executable == b.executable);
-    if backends.len() != 1 {
-        return Err(Error::new(
-            "DESKTOP_BACKEND",
-            "无法确定桌面正在使用的后端。",
-        ));
-    }
+    let app_server_executable = desktop_backend(&snapshot, desktop.pid)?;
     let desktop_executable = PathBuf::from(desktop.executable.as_ref().unwrap());
-    let app_server_executable = PathBuf::from(
-        backends[0]
-            .executable
-            .as_ref()
-            .ok_or_else(|| Error::new("DESKTOP_BACKEND", "无法读取后端路径。"))?,
-    );
     #[cfg(target_os = "macos")]
     let archive = platform::macos::bundle(&desktop_executable)?.join("Contents/Resources/app.asar");
     #[cfg(not(target_os = "macos"))]
@@ -413,6 +394,52 @@ pub async fn prepare(pid: Option<u32>) -> Result<Installation> {
         false,
     )
     .await
+}
+
+fn desktop_backend(snapshot: &platform::Snapshot, desktop_pid: u32) -> Result<PathBuf> {
+    let processes: std::collections::HashMap<_, _> =
+        snapshot.processes.iter().map(|p| (p.pid, p)).collect();
+    let mut backends: Vec<_> = snapshot
+        .processes
+        .iter()
+        .filter(|p| {
+            if !p.is_app_server {
+                return false;
+            }
+            let mut parent_pid = p.parent_pid;
+            // Bound traversal even if a changing process snapshot contains a cycle.
+            for _ in 0..processes.len() {
+                if parent_pid == desktop_pid {
+                    return true;
+                }
+                let Some(parent) = processes.get(&parent_pid) else {
+                    break;
+                };
+                // An app-server's own children belong to its turns, not the desktop.
+                if parent.is_app_server {
+                    break;
+                }
+                parent_pid = parent.parent_pid;
+            }
+            false
+        })
+        .collect();
+    // Recent desktops run more than one app-server from the same signed binary.
+    backends.sort_by(|a, b| a.executable.cmp(&b.executable));
+    backends.dedup_by(|a, b| a.executable == b.executable);
+    if backends.len() != 1 {
+        return Err(Error::new(
+            "DESKTOP_BACKEND",
+            if backends.is_empty() {
+                "未找到桌面正在使用的 app-server 后端。请先打开并保持官方 Codex 桌面运行，等待后端启动后重试；也可选择独立模式指定 Codex 路径。"
+            } else {
+                "检测到桌面使用多个不同路径的 app-server 后端，无法唯一确定安装。请重启官方 Codex 桌面后重试，或选择独立模式指定 Codex 路径。"
+            },
+        ));
+    }
+    Ok(PathBuf::from(backends[0].executable.as_ref().ok_or_else(
+        || Error::new("DESKTOP_BACKEND", "无法读取后端路径。"),
+    )?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -655,6 +682,125 @@ async fn validate_desktop(installation: &Installation) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn process(
+        pid: u32,
+        parent_pid: u32,
+        executable: &str,
+        is_app_server: bool,
+    ) -> platform::Process {
+        platform::Process {
+            pid,
+            parent_pid,
+            name: Path::new(executable)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            executable: Some(executable.into()),
+            is_app_server,
+        }
+    }
+
+    #[test]
+    fn desktop_backend_follows_helpers_and_deduplicates_the_same_binary() {
+        let mut snapshot = platform::Snapshot {
+            processes: vec![
+                process(10, 1, "/app/ChatGPT", false),
+                process(11, 10, "/app/codex", true),
+            ],
+            pipes: vec![],
+            listeners: vec![],
+        };
+        assert_eq!(
+            desktop_backend(&snapshot, 10).unwrap(),
+            Path::new("/app/codex")
+        );
+        snapshot.processes.extend([
+            process(12, 10, "/app/Codex (Aperitif)", false),
+            process(13, 12, "/app/Codex (Aperitif)", false),
+            process(14, 13, "/app/codex", true),
+            // Servers launched by turns and by other desktops must not count.
+            process(15, 14, "/bin/zsh", false),
+            process(16, 15, "/other/codex", true),
+            process(20, 1, "/other/ChatGPT", false),
+            process(21, 20, "/other/codex", true),
+        ]);
+        assert_eq!(
+            desktop_backend(&snapshot, 10).unwrap(),
+            Path::new("/app/codex")
+        );
+        snapshot.processes.retain(|p| p.pid != 11);
+        assert_eq!(
+            desktop_backend(&snapshot, 10).unwrap(),
+            Path::new("/app/codex")
+        );
+        assert_eq!(
+            desktop_backend(&snapshot, 20).unwrap(),
+            Path::new("/other/codex")
+        );
+    }
+
+    #[test]
+    fn desktop_backend_rejects_ambiguous_missing_and_cyclic_processes() {
+        let mut snapshot = platform::Snapshot {
+            processes: vec![
+                process(10, 1, "/app/ChatGPT", false),
+                process(11, 10, "/app/codex", true),
+                process(12, 10, "/different/codex", true),
+            ],
+            pipes: vec![],
+            listeners: vec![],
+        };
+        let error = desktop_backend(&snapshot, 10).unwrap_err();
+        assert_eq!(error.code, "DESKTOP_BACKEND");
+        assert!(error.message.contains("多个不同路径"));
+        snapshot.processes.retain(|p| p.pid == 10);
+        snapshot.processes.extend([
+            process(13, 99, "/app/codex", true),
+            process(14, 15, "/app/helper", false),
+            process(15, 14, "/app/helper", false),
+            process(16, 14, "/app/codex", true),
+        ]);
+        let error = desktop_backend(&snapshot, 10).unwrap_err();
+        assert_eq!(error.code, "DESKTOP_BACKEND");
+        assert!(error.message.contains("未找到"));
+        snapshot.processes.push(process(17, 10, "/app/codex", true));
+        snapshot.processes.last_mut().unwrap().executable = None;
+        assert_eq!(
+            desktop_backend(&snapshot, 10).unwrap_err().message,
+            "无法读取后端路径。"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "Requires a running official Codex desktop; reads installation without saving configuration or sending model requests"]
+    async fn running_desktop_installation_is_recognized() {
+        let snapshot = platform::discover().await.unwrap();
+        let desktops = platform::desktop_owners(&snapshot);
+        assert_eq!(desktops.len(), 1);
+        let desktop = &desktops[0];
+        let executable = PathBuf::from(desktop.executable.as_ref().unwrap());
+        let archive = platform::macos::bundle(&executable)
+            .unwrap()
+            .join("Contents/Resources/app.asar");
+        let installation = inspect_paths(
+            InstallationPaths {
+                desktop_executable: Some(executable),
+                app_server_executable: desktop_backend(&snapshot, desktop.pid).unwrap(),
+                archive: Some(archive),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        println!(
+            "Detected desktop {} with backend {}",
+            installation.client_info().unwrap().version,
+            installation.app_server_executable.display()
+        );
+    }
 
     fn cached_installation(path: &Path) -> Installation {
         Installation {

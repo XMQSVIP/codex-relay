@@ -154,6 +154,8 @@ python scripts/test_responses_sdk.py --model-host 127.0.0.1 --relay-binary targe
 
 安装解析改动运行对应后端快速检查及 `node scripts/cargo-with-memory.mjs test --locked --lib installation::`；覆盖入口目录和脚本改名、分块布局、重复声明及扫描边界。真实安装包的只读识别是单独的 ignored 用例，设置 `BRIDGE_NATIVE_ARCHIVE` 后按 [Windows 安装识别说明](WINDOWS-DEVELOPMENT.md#解压构建和运行) 执行，不会改写安装配置或启动桌面。
 
+macOS 进程识别改动同时运行 `node scripts/cargo-with-memory.mjs test --locked --lib platform::macos::`，覆盖应用包辅助进程保留及连接归属校验。保持官方桌面运行时，可执行 `node scripts/cargo-with-memory.mjs test --locked --lib installation::tests::running_desktop_installation_is_recognized -- --ignored --nocapture`，验证真实进程树、签名、归档及后端版本；不保存安装配置、不登录或发送模型请求。
+
 诊断界面改动选择前端快速检查和 `pnpm test:web diagnostics-layout.spec.ts installation-settings.spec.ts request-debug.spec.ts`，核对宽窄屏、深浅主题、保存结果、失败及运行状态、键盘操作与焦点。模拟 API 不替代真实安装包识别；纯文档不执行这些业务检查。
 
 ## 协议探测与实验

@@ -131,18 +131,6 @@ pub async fn discover() -> Result<Snapshot> {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        if ![
-            "ChatGPT",
-            "Codex",
-            "codex",
-            "node",
-            "codex-relay",
-            "codex-bridge",
-        ]
-        .contains(&name.as_str())
-        {
-            continue;
-        }
         let is_app_server = name == "codex"
             && output("/bin/ps", &["-p", &ids[0].to_string(), "-o", "args="])
                 .await
@@ -155,6 +143,7 @@ pub async fn discover() -> Result<Snapshot> {
             is_app_server,
         });
     }
+    let processes = relevant_processes(processes);
     let mut listeners = Vec::new();
     // lsof returns 1 if there are no matching sockets. Discovery can still find installations.
     if let Ok(sockets) = output("/usr/sbin/lsof", &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]).await {
@@ -183,6 +172,33 @@ pub async fn discover() -> Result<Snapshot> {
         pipes: vec![],
         listeners,
     })
+}
+
+fn relevant_processes(processes: Vec<Process>) -> Vec<Process> {
+    let bundles: Vec<_> = processes
+        .iter()
+        .filter(|p| !p.is_app_server && ["ChatGPT", "Codex"].contains(&p.name.as_str()))
+        .filter_map(|p| bundle(Path::new(p.executable.as_ref()?)).ok())
+        .collect();
+    processes
+        .into_iter()
+        .filter(|p| {
+            [
+                "ChatGPT",
+                "Codex",
+                "codex",
+                "node",
+                "codex-relay",
+                "codex-bridge",
+            ]
+            .contains(&p.name.as_str())
+                // Electron can launch app-server through a utility process. Keep
+                // bundle helpers so installation discovery can follow their parents.
+                || p.executable.as_ref().is_some_and(|path| {
+                    bundles.iter().any(|root| Path::new(path).starts_with(root))
+                })
+        })
+        .collect()
 }
 
 pub fn bundle(desktop: &Path) -> Result<PathBuf> {
@@ -305,6 +321,41 @@ pub async fn verify_peer(peer: u16, server: u16, pid: u32, expected: &Path) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_keeps_helpers_in_the_desktop_bundle() {
+        let main = "/Applications/Codex Desktop.app/Contents/MacOS/ChatGPT";
+        let helper = "/Applications/Codex Desktop.app/Contents/Frameworks/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)";
+        let backend = "/Applications/Codex Desktop.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+        let other = "/Applications/Other.app/Contents/MacOS/Other";
+        let lookalike = "/Applications/Codex Desktop.app.backup/Contents/MacOS/Helper";
+        let processes = [main, helper, backend, other, lookalike]
+            .iter()
+            .enumerate()
+            .map(|(i, path)| Process {
+                pid: 10 + i as u32,
+                parent_pid: if i == 0 { 1 } else { 9 + i as u32 },
+                name: Path::new(path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                executable: Some((*path).into()),
+                is_app_server: i == 2,
+            })
+            .collect();
+        let snapshot = Snapshot {
+            processes: relevant_processes(processes),
+            pipes: vec![],
+            listeners: vec![],
+        };
+        assert_eq!(snapshot.processes.len(), 3);
+        assert_eq!(snapshot.processes[1].executable.as_deref(), Some(helper));
+        let desktops = desktop_owners(&snapshot);
+        assert_eq!(desktops.len(), 1);
+        assert_eq!(desktops[0].pid, 10);
+    }
+
     #[test]
     fn system_proxy_uses_global_manual_settings_and_rejects_invalid_endpoints() {
         let value = "<dictionary> {\n HTTPEnable : 1\n HTTPProxy : 127.0.0.1\n HTTPPort : 7897\n HTTPSEnable : 1\n HTTPSProxy : ::1\n HTTPSPort : 7897\n __SCOPED__ : <dictionary> {\n en0 : <dictionary> {\n HTTPProxy : evil.invalid\n }\n }\n}";
